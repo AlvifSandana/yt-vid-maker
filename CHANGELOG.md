@@ -57,6 +57,7 @@ Rilis pertama Bang Story (sebelumnya bernama Studio Cerita).
 - Salinan siap jalan dengan skrip START untuk Windows dan macOS.
 - Dokumentasi pengembang: [AGENTS.md](AGENTS.md) dan folder [docs/](docs/README.md).
 - Kode dirilis dengan [lisensi MIT](LICENSE). README dilengkapi badge dan screenshot.
+- Installer Windows (`BangStory-Setup-1.0.0.exe`) dengan ikon dari logo Bang Story.
 
 ### Batasan yang diketahui
 Lihat [docs/masalah-diketahui.md](docs/masalah-diketahui.md). Yang paling terasa:

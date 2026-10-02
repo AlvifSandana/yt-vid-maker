@@ -142,11 +142,20 @@ selama ekspor berjalan.
    Halaman About membaca versi dari `app.getVersion()`. Badge versi di `README.md` ditulis manual, jadi ubah juga.
 2. Catat perubahan di `CHANGELOG.md`.
 3. `npm run typecheck` dan `npm run build`.
-4. `npm run dist` → `dist/BangStory-Setup-<versi>.exe`.
+4. `npm run dist` → `dist/BangStory-Setup-<versi>.exe`. Build pertama mengunduh alat NSIS dan winCodeSign ke
+   cache electron-builder.
+5. Buat release di GitHub dengan tag `v<versi>`. Upload hanya file `.exe`. File `.blockmap` dan `latest.yml` baru
+   berguna kalau nanti ada fitur update otomatis.
 
 Yang ikut dipaketkan (lihat `electron-builder.yml`): `out/`, FFmpeg (di luar asar), `resources/fonts` → `fonts`,
 `resources/whisper` → `whisper`, `resources/licenses` → `licenses`, dan lisensi FFmpeg →
-`licenses/FFmpeg-LICENSE.txt`.
+`licenses/FFmpeg-LICENSE.txt`. Ikon aplikasi dan installer diambil otomatis dari `build/icon.ico` (folder
+`buildResources`). Kalau logo berubah, buat ulang `icon.ico` (16–256 px) dan `icon.png` (1024 px) dari logo yang baru.
+
+Installer hanya untuk Windows dan belum ditandatangani (*code signing*), jadi Windows SmartScreen menampilkan
+peringatan saat pertama kali dijalankan. Installer macOS (`.dmg`) hanya bisa dibuat di Mac, dan butuh akun Apple
+Developer supaya tidak diblokir Gatekeeper. Selain itu, Whisper versi macOS juga belum ada. Lihat
+[masalah-diketahui.md](masalah-diketahui.md).
 
 ### Screenshot README
 
@@ -163,5 +172,6 @@ Gambar di `docs/images/` diambil dari aplikasi sungguhan dengan dev harness, mem
 ### Membagikan kode tanpa installer
 
 Folder proyek bisa dibagikan tanpa `node_modules`, `out`, dan `dist`. Penerima cukup menjalankan `npm install`
-lalu `npm run dev`. Salinan distribusi juga bisa diberi skrip `START.bat` (Windows) atau `START.command` (macOS)
-yang memasang dependensi, mengunduh Electron, membuild kalau `out/` belum ada, lalu membuka aplikasi.
+lalu `npm run dev`. Salinan distribusi juga bisa diberi skrip `START - WIN.bat` (Windows) atau
+`START - MAC.command` (macOS) yang memasang dependensi, mengunduh Electron, membuild kalau `out/` belum ada, lalu
+membuka aplikasi.
