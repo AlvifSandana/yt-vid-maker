@@ -8,6 +8,7 @@ import type {
   AspectRatio,
   ExportOptions,
   KeyTestResult,
+  LlmProvider,
   ModelSource,
   NewProjectInput,
   ProjectSnapshot,
@@ -46,8 +47,9 @@ import {
   saveSnapshot,
   updateAssetMeta
 } from './repo'
-import { clearSecret, keyStatuses, recordCheck, revealSecret, setSecret } from './secrets'
+import { clearSecret, clearSecretValue, encryptionAvailable, keyStatuses, recordCheck, revealSecret, setSecret } from './secrets'
 import { dropCache, getSettings, setSettings } from './settings'
+import { cleanKey, urlOrigin } from '@shared/keys'
 import { probeDurationMs, probeSize } from './services/audio'
 import * as eleven from './services/elevenlabs'
 import * as gemini from './services/gemini'
@@ -71,12 +73,39 @@ function handle(channel: string, fn: Handler): void {
 
 async function testProvider(provider: ApiProvider, key?: string): Promise<KeyTestResult> {
   if (provider === 'higgsfield') return hf.testCredentials(key)
+  if (provider === 'custom-media') return hf.testCustomMedia(key)
   if (provider === 'elevenlabs') return eleven.testKey(key)
-  return llm.testLlm(provider, key)
+  return llm.testLlm(provider as LlmProvider, key)
 }
 
 function defaultExportFolder(): string {
-  return getSettings().exportFolder ?? join(app.getPath('videos'), 'Bang Story')
+  return getSettings().exportFolder ?? join(app.getPath('videos'), 'Story Maker')
+}
+
+function endpointUrl(raw: string): string {
+  const url = raw.trim().replace(/\/+$/, '')
+  if (!/^https?:\/\/[^\s]+$/i.test(url) || !urlOrigin(url)) throw new Error('Alamat endpoint harus diawali http:// atau https://')
+  return url
+}
+
+/**
+ * A custom endpoint key belongs to the server it was saved for. When the address moves to another server
+ * and no new key is given, the old key is dropped so it is never sent there. Returns true when it was dropped.
+ */
+function bindCustomKey(provider: 'custom' | 'custom-media', oldUrl: string, newUrl: string, key: string): boolean {
+  const clean = cleanKey(key)
+  if (clean) {
+    setSecret(provider, clean)
+    return false
+  }
+  if (!revealSecret(provider) || urlOrigin(oldUrl) === urlOrigin(newUrl)) return false
+  clearSecretValue(provider)
+  return true
+}
+
+function recordCustom(provider: 'custom' | 'custom-media', result: KeyTestResult, dropped: boolean): KeyTestResult {
+  recordCheck(provider, result.ok, result.message)
+  return dropped ? { ...result, message: `${result.message} · kunci lama dihapus karena alamat server berubah` } : result
 }
 
 export function registerIpc(): void {
@@ -182,10 +211,15 @@ export function registerIpc(): void {
   })
 
   handle('settings:get', () => getSettings())
-  handle('settings:set', (patch: Partial<AppSettings>) => setSettings(patch))
+  handle('settings:set', (patch: Partial<AppSettings>) => {
+    // Endpoint URLs only change through setCustom/setCustomMedia, which drop a key that belongs to another server.
+    const { customBaseUrl: _u, customMediaBaseUrl: _m, ...rest } = patch
+    return setSettings(rest)
+  })
   handle('settings:keys', () => keyStatuses())
+  handle('settings:encryption', () => encryptionAvailable())
   handle('settings:setKey', async (provider: ApiProvider, key: string) => {
-    const clean = key.trim()
+    const clean = cleanKey(key)
     if (!clean) throw new Error('Kunci masih kosong')
     setSecret(provider, clean)
     dropCache(`models:${provider}`)
@@ -196,20 +230,32 @@ export function registerIpc(): void {
     return result
   })
   handle('settings:setCustom', async (baseUrl: string, key: string) => {
-    const url = baseUrl.trim().replace(/\/+$/, '')
-    if (!/^https?:\/\/[^\s]+$/i.test(url)) throw new Error('Alamat endpoint harus diawali http:// atau https://')
+    const url = endpointUrl(baseUrl)
+    const dropped = bindCustomKey('custom', getSettings().customBaseUrl, url, key)
     setSettings({ customBaseUrl: url })
-    if (key.trim()) setSecret('custom', key.trim())
     dropCache('models:custom')
-    const result = await llm.testLlm('custom', key.trim() || undefined, url)
-    recordCheck('custom', result.ok, result.message)
-    return result
+    const result = await llm.testLlm('custom', revealSecret('custom'), url)
+    return recordCustom('custom', result, dropped)
   })
-  handle('settings:clearKey', (provider: ApiProvider) => {
+  handle('settings:setCustomMedia', async (baseUrl: string, key: string) => {
+    const url = endpointUrl(baseUrl)
+    const dropped = bindCustomKey('custom-media', getSettings().customMediaBaseUrl, url, key)
+    setSettings({ customMediaBaseUrl: url })
+    const result = await hf.testCustomMedia(revealSecret('custom-media') ?? undefined, url)
+    return recordCustom('custom-media', result, dropped)
+  })
+  handle('settings:clearKey', (provider: ApiProvider, keyOnly?: boolean) => {
+    if (keyOnly && (provider === 'custom' || provider === 'custom-media')) {
+      clearSecretValue(provider)
+      if (provider === 'custom') dropCache('models:custom')
+      return
+    }
     clearSecret(provider)
     dropCache(`models:${provider}`)
+    if (provider === 'gemini') dropCache('models:gemini-tts')
     if (provider === 'higgsfield') forgetEstimates()
     if (provider === 'custom') setSettings({ customBaseUrl: '' })
+    if (provider === 'custom-media') setSettings({ customMediaBaseUrl: '' })
   })
   handle('models:list', (source: ModelSource, refresh?: boolean) => llm.listModels(source, !!refresh))
   handle('settings:testKey', async (provider: ApiProvider) => {

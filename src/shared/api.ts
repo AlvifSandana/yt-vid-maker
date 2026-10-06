@@ -76,10 +76,15 @@ export interface StudioApi {
     get(): Promise<AppSettings>
     set(patch: Partial<AppSettings>): Promise<AppSettings>
     keys(): Promise<KeyStatus[]>
+    /** False when the OS cannot encrypt keys, so they would be stored as plain text. */
+    encryption(): Promise<boolean>
     setKey(provider: ApiProvider, key: string): Promise<KeyTestResult>
     /** Saves an OpenAI-compatible endpoint; the key is optional for local servers. */
     setCustom(baseUrl: string, key: string): Promise<KeyTestResult>
-    clearKey(provider: ApiProvider): Promise<void>
+    /** Saves a custom Higgsfield-compatible or local image/video endpoint. */
+    setCustomMedia(baseUrl: string, key: string): Promise<KeyTestResult>
+    /** `keyOnly` removes just the optional key of a custom endpoint and keeps its address. */
+    clearKey(provider: ApiProvider, keyOnly?: boolean): Promise<void>
     /** The full stored key, only for the "show key" button. */
     revealKey(provider: ApiProvider): Promise<string | null>
     testKey(provider: ApiProvider): Promise<KeyTestResult>

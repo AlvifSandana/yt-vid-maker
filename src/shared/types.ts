@@ -2,7 +2,8 @@ export type ProjectStatus = 'draft' | 'script' | 'storyboard' | 'editing' | 'exp
 export type AspectRatio = '16:9' | '9:16'
 export type TtsProvider = 'gemini' | 'elevenlabs'
 export type LlmProvider = 'gemini' | 'openrouter' | 'groq' | 'custom'
-export type ApiProvider = 'higgsfield' | 'gemini' | 'elevenlabs' | 'openrouter' | 'groq' | 'custom'
+export type MediaProvider = 'higgsfield' | 'custom'
+export type ApiProvider = 'higgsfield' | 'gemini' | 'elevenlabs' | 'openrouter' | 'groq' | 'custom' | 'custom-media'
 /** Where a live model list comes from: an LLM provider, or a TTS catalog. */
 export type ModelSource = LlmProvider | 'gemini-tts' | 'elevenlabs'
 export type MotionType = 'camera' | 'video'
@@ -287,6 +288,10 @@ export interface AppSettings {
   customBaseUrl: string
   geminiTtsModel: string
   elevenModel: string
+  /** Provider for images and videos: Higgsfield or a custom/local endpoint. */
+  mediaProvider: MediaProvider
+  /** Base URL of a custom Higgsfield-compatible or local image/video endpoint. */
+  customMediaBaseUrl: string
   /** Higgsfield models for new projects: the last ones picked in the Idea step. */
   imageModel: string
   videoModel: string

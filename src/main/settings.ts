@@ -11,6 +11,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   customBaseUrl: '',
   geminiTtsModel: 'gemini-3.8-flash-tts',
   elevenModel: 'eleven_multilingual_v2',
+  mediaProvider: 'higgsfield',
+  customMediaBaseUrl: '',
   imageModel: DEFAULT_IMAGE_MODEL,
   videoModel: DEFAULT_VIDEO_MODEL,
   whisperAuto: true
@@ -27,6 +29,7 @@ export function getSettings(): AppSettings {
   }
   // A provider that no longer exists (e.g. from an older build) falls back to Gemini.
   if (!(out.llmProvider in DEFAULT_SETTINGS.llmModels)) out.llmProvider = 'gemini'
+  if (out.mediaProvider !== 'custom') out.mediaProvider = 'higgsfield'
   // Models dropped from the Higgsfield catalog fall back to the defaults.
   out.imageModel = getImageModel(out.imageModel).id
   out.videoModel = getVideoModel(out.videoModel).id

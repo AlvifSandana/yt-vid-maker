@@ -4,10 +4,15 @@ import { extname } from 'node:path'
 import { app } from 'electron'
 import type { CreditEstimate, KeyTestResult } from '@shared/types'
 import { getSecret, requireSecret } from '../secrets'
+import { getSettings } from '../settings'
 import { ApiError, readError, sleep } from './http'
 
 // Development builds can point at a local mock (STUDIO_HF_BASE) to test the UI without spending credits.
-const BASE = (!app.isPackaged && process.env.STUDIO_HF_BASE) || 'https://api.higgsfield.ai'
+function getBase(): string {
+  const s = getSettings()
+  if (s.mediaProvider === 'custom' && s.customMediaBaseUrl) return s.customMediaBaseUrl.replace(/\/+$/, '')
+  return (!app.isPackaged && process.env.STUDIO_HF_BASE) || 'https://api.higgsfield.ai'
+}
 
 export type HfStatus = 'queued' | 'in_progress' | 'completed' | 'failed' | 'nsfw' | 'canceled'
 
@@ -18,7 +23,12 @@ export interface HfResult {
   error?: string
 }
 
-function authHeader(cred?: string): string {
+function authHeader(cred?: string): string | null {
+  const s = getSettings()
+  if (s.mediaProvider === 'custom') {
+    const k = cred ?? getSecret('custom-media')
+    return k ? `Key ${k}` : null
+  }
   return `Key ${cred ?? requireSecret('higgsfield')}`
 }
 
@@ -34,15 +44,16 @@ function friendly(status: number, detail: string): ApiError {
 }
 
 async function hf<T>(path: string, init: RequestInit & { cred?: string } = {}): Promise<T> {
-  const url = path.startsWith('http') ? path : `${BASE}/${path.replace(/^\//, '')}`
+  const base = getBase()
+  const url = path.startsWith('http') ? path : `${base}/${path.replace(/^\//, '')}`
+  const auth = authHeader(init.cred)
+  const headers = new Headers(init.headers)
+  headers.set('Content-Type', 'application/json')
+  headers.set('Accept', 'application/json')
+  if (auth) headers.set('Authorization', auth)
   const res = await fetch(url, {
     ...init,
-    headers: {
-      Authorization: authHeader(init.cred),
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...(init.headers ?? {})
-    }
+    headers
   })
   if (!res.ok) throw friendly(res.status, await readError(res))
   const text = await res.text()
@@ -180,5 +191,24 @@ export async function testCredentials(cred?: string): Promise<KeyTestResult> {
         message: 'Kunci ditolak. Kunci Higgsfield berformat KEY_ID:KEY_SECRET. Pakai tombol "Copy API key" di console, atau gabungkan Key ID dan Secret dengan titik dua.'
       }
     return { ok: false, message: (e as Error).message }
+  }
+}
+
+export async function testCustomMedia(cred?: string, baseUrl?: string): Promise<KeyTestResult> {
+  const s = getSettings()
+  const url = (baseUrl?.trim() || s.customMediaBaseUrl.trim()).replace(/\/+$/, '')
+  if (!url) return { ok: false, message: 'Alamat endpoint belum diatur' }
+  const c = cred ?? getSecret('custom-media')
+  try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json', Accept: 'application/json' }
+    if (c) headers.Authorization = `Key ${c}`
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(6000)
+    })
+    return { ok: true, message: `Terhubung ke server (HTTP ${res.status})` }
+  } catch (e) {
+    return { ok: false, message: `Gagal terhubung: ${(e as Error).message}` }
   }
 }

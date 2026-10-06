@@ -15,6 +15,16 @@ Pengguna memasukkan kuncinya sendiri di **Pengaturan › Layanan AI dan kunci**.
 - `revealSecret` hanya dipanggil tombol "tampilkan kunci" di Pengaturan.
 - **Jangan pernah** menulis kunci ke log, pesan error, file, URL, atau mengirimnya ke layanan lain.
 - Mengganti kunci Higgsfield menghapus cache estimasi kredit (`forgetEstimates`).
+- Kalau `safeStorage` tidak tersedia, kunci disimpan sebagai teks biasa. Pengaturan menampilkan peringatan lewat
+  IPC `settings:encryption`.
+- Kunci yang ditempel dirapikan dulu dengan `cleanKey` (`shared/keys.ts`): tanda kutip, awalan `Bearer `, nama
+  variabel `NAMA_KEY=`, dan spasi dibuang. `keyFormatWarning` hanya memberi peringatan, tidak memblokir.
+- **Kunci endpoint custom terikat ke origin servernya.** Kalau base URL pindah ke origin lain tanpa kunci baru,
+  kunci lama dihapus *sebelum* tes koneksi (`bindCustomKey` di `ipc.ts`), supaya tidak terkirim ke server lain.
+  Karena itu `settings:set` mengabaikan `customBaseUrl`/`customMediaBaseUrl`; ubah lewat `setCustom`/`setCustomMedia`.
+  `clearKey(provider, true)` menghapus kuncinya saja dan alamatnya tetap tersimpan.
+- Saat halaman Pengaturan dibuka, penyedia yang sedang dipakai dites ulang diam-diam kalau hasil tes terakhirnya
+  lebih dari 6 jam (`STALE_MS`), supaya status dan sisa kuota (OpenRouter, ElevenLabs) tetap baru.
 
 | Penyedia (`ApiProvider`) | Dipakai untuk |
 |---|---|
@@ -90,15 +100,7 @@ di API Higgsfield (hanya di aplikasi webnya). Satu entri:
   `<folder data>\models\whisper`, bisa dijeda dan dilanjutkan (HTTP Range), lalu dicek SHA-256. Untuk pengembangan, `STUDIO_WHISPER_URL` bisa menunjuk salinan lokal.
 - Dijalankan di antrean `whisper` (satu per satu). Detail argumennya di [alur-produksi.md](alur-produksi.md#5-caption-akurat-whisper-lokal).
 
-## YouTube (halaman About)
-
-Video tutorial diputar lewat iframe `https://www.youtube.com/embed/<id>`. Sejak 2025 YouTube mewajibkan pemutar
-embed mengirim identitas lewat header HTTP Referer (tanpa itu: Error 153). Aplikasi yang memuat halaman dari
-`file://` tidak mengirim Referer, jadi `identifyToYouTube()` (`src/main/index.ts`) menambahkan
-`Referer: https://id.bangtutorial.bangstory/` (ID aplikasi) hanya untuk permintaan embed. Iframe tanpa
-autoplay, supaya putaran dari pengguna terhitung sebagai view.
-
 ## Membuka tautan
 
 `app:openExternal` hanya menerima URL `https://` dan membukanya di browser bawaan. Pakai ini untuk semua tautan
-ke luar (dokumentasi penyedia, channel YouTube, Suno, dan lainnya).
+ke luar (dokumentasi penyedia, Suno, dan lainnya).

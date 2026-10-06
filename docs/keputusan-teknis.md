@@ -82,6 +82,8 @@ dan audio dimatikan lewat parameter kalau modelnya punya. Audio dari file video 
 Kunci kriptografi `safeStorage` baru tertulis ke `Local State` sekitar 10 detik setelah dibuat. Membuatnya saat
 startup (`warmUpEncryption`) mencegah kunci API tidak terbaca setelah aplikasi ditutup paksa.
 
-### YouTube embed diberi Referer berisi ID aplikasi
-Halaman dari `file://` tidak mengirim Referer, dan YouTube menolak embed tanpa identitas (Error 153). Header
-ditambahkan hanya untuk `https://www.youtube.com/embed/*`.
+### YouTube embed butuh Referer berisi ID aplikasi (embed sudah dihapus)
+Halaman dari `file://` tidak mengirim Referer, dan YouTube menolak embed tanpa identitas (Error 153). Video
+tutorial di About dan `identifyToYouTube()` sudah dihapus, begitu juga `frame-src` di CSP. Kalau embed YouTube
+dipakai lagi, kembalikan header Referer (hanya untuk `https://www.youtube.com/embed/*`) dan `frame-src
+https://www.youtube.com`, dan jangan pakai autoplay supaya putaran dari pengguna terhitung sebagai view.

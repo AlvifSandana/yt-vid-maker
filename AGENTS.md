@@ -1,6 +1,6 @@
 # AGENTS.md — panduan untuk AI agent dan pengembang
 
-Bang Story adalah aplikasi desktop (Electron + React + TypeScript) yang mengubah ide cerita menjadi video YouTube:
+Story Maker (sebelumnya Bang Story) adalah aplikasi desktop (Electron + React + TypeScript) yang mengubah ide cerita menjadi video YouTube:
 AI menulis naskah dan rencana visual, Higgsfield membuat gambar dan video, Gemini atau ElevenLabs membuat suara
 narator, lalu semuanya dirangkai di editor timeline dan diekspor jadi MP4 dengan FFmpeg.
 
@@ -38,11 +38,15 @@ src/
     fontMetrics.ts lebar teks dari file TTF (untuk kotak caption di ekspor)
     jobs.ts, events.ts  antrean job + event ke renderer
     secrets.ts     kunci API terenkripsi (safeStorage/DPAPI)
+    settings.ts    pengaturan aplikasi (tabel key/value) + cache daftar model
+    paths.ts, protocol.ts  folder data, database, dan proyek; protokol file aset lokal untuk renderer
     services/      klien API: gemini, elevenlabs, higgsfield, llm (OpenAI-compatible), audio, http
     devharness.ts  otomatisasi uji (hanya mode pengembangan)
   preload/         jembatan aman: window.api (lihat src/shared/api.ts)
   shared/          kode yang dipakai main DAN renderer (tipe, aturan gerak, caption, timeline)
+    keys.ts        rapikan kunci yang ditempel (cleanKey), cek format kunci, origin endpoint
   renderer/src/    tampilan React + Tailwind v4 + Zustand
+    pages/Settings.tsx  Pengaturan: layanan AI dan kunci, umum, tentang aplikasi
     pages/project/  langkah Ide, Naskah, Storyboard, Editor
     pages/project/editor/  pratinjau (Player), Timeline, Inspector (panel kanan), engine pemutaran
 resources/         font caption, whisper-cli.exe + DLL, file lisensi
@@ -58,7 +62,9 @@ docs/              dokumentasi pengembang
    `timeline.ts` (potongan suara/musik, kata caption per klip), `overlays.ts`, `higgsfield.ts`.
    Jangan menghitung ulang aturan itu di satu sisi saja.
 2. **Kunci API milik pengguna (BYOK).** Kunci hanya disimpan terenkripsi lewat `secrets.ts`, hanya dikirim ke
-   layanannya masing-masing, dan tidak pernah dicetak ke log, error, atau file.
+   layanannya masing-masing, dan tidak pernah dicetak ke log, error, atau file. Kunci endpoint custom terikat ke
+   origin servernya: ubah alamat hanya lewat `setCustom`/`setCustomMedia` (bukan `settings:set`), yang menghapus kunci
+   lama sebelum tes kalau server berpindah.
 3. **Migrasi database hanya ditambah di akhir** array `MIGRATIONS` di `src/main/db/index.ts`. Jangan mengubah
    migrasi lama; `PRAGMA user_version` menghitung berapa yang sudah dijalankan.
 4. **Kolom klip baru** harus ditambahkan di semua tempat: tipe `Clip` (`shared/types.ts`), migrasi, `toClip`,

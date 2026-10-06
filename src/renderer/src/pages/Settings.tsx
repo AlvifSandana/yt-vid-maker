@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   ChevronDown,
@@ -13,14 +14,26 @@ import {
   Info,
   KeyRound,
   Mic,
+  ShieldAlert,
   SlidersHorizontal,
-  Trash2
+  Trash2,
+  Users
 } from 'lucide-react'
-import { HF_IMAGE_MODELS, HF_VIDEO_MODELS } from '@shared/higgsfield'
+import {
+  HF_IMAGE_MODELS,
+  HF_VIDEO_MODELS,
+  getImageModel,
+  getVideoModel,
+  hfModelOptions,
+  maxRefs
+} from '@shared/higgsfield'
+import { cleanKey, keyFormatWarning } from '@shared/keys'
 import { LANGUAGES, LLM_PROVIDERS } from '@shared/models'
-import type { ApiProvider, AppSettings, KeyStatus, KeyTestResult, LlmProvider, TtsProvider } from '@shared/types'
+import type { ApiProvider, AppSettings, KeyStatus, KeyTestResult, LlmProvider, MediaProvider, TtsProvider, WhisperStatus } from '@shared/types'
 import { Logo } from '../components/Logo'
+import { ModelLogo } from '../components/ModelLogo'
 import { ModelPicker } from '../components/ModelPicker'
+import { Popover } from '../components/Popover'
 import { ProviderLogo, type ProviderLogoId } from '../components/ProviderLogo'
 import { Select } from '../components/Select'
 import { AboutSection } from './AboutSection'
@@ -31,6 +44,7 @@ import { useModels } from '../lib/useModels'
 import { useApp } from '../store/app'
 
 type Tab = 'services' | 'general' | 'about'
+type StatusOf = (p: ApiProvider) => KeyStatus | undefined
 
 interface ProviderOption<T extends string> {
   id: T
@@ -38,9 +52,42 @@ interface ProviderOption<T extends string> {
   note: string
   logo: ProviderLogoId
   status?: KeyStatus
+  checking?: boolean
 }
 
-function StatusBadge({ status }: { status?: KeyStatus }) {
+interface SectionProps {
+  settings: AppSettings
+  statusOf: StatusOf
+  checking: ApiProvider[]
+  onChanged: () => void
+  onSettings: (s: AppSettings) => void
+}
+
+const TTS_OPTIONS: Omit<ProviderOption<TtsProvider>, 'status'>[] = [
+  { id: 'gemini', name: 'Gemini TTS', note: 'Suara Google Gemini, 30 pilihan suara, mendukung bahasa Indonesia.', logo: 'gemini' },
+  { id: 'elevenlabs', name: 'ElevenLabs', note: 'Suara sangat natural dengan waktu kata yang presisi untuk caption karaoke.', logo: 'elevenlabs' }
+]
+
+const MEDIA_OPTIONS: Omit<ProviderOption<MediaProvider>, 'status'>[] = [
+  { id: 'higgsfield', name: 'Higgsfield', note: 'GPT Image 2.5, Kling, Seedance, dan model lain dari akun Higgsfield kamu.', logo: 'higgsfield' },
+  { id: 'custom', name: 'Endpoint custom', note: 'Server mandiri atau proxy lokal (misalnya ComfyUI proxy atau mock API Higgsfield).', logo: 'custom' }
+]
+
+const mediaKey = (s: AppSettings): ApiProvider => (s.mediaProvider === 'custom' ? 'custom-media' : 'higgsfield')
+
+/** The providers the current settings actually use, one per service. */
+const activeProviders = (s: AppSettings): ApiProvider[] => [s.llmProvider, s.defaultTtsProvider, mediaKey(s)]
+
+/** "Saved but not tested yet" still counts as ready; only a failed or missing key blocks the service. */
+const isReady = (s?: KeyStatus): boolean => !!s?.configured && !s.unreadable && s.lastOk !== false
+
+/** Results older than this are re-tested quietly when the page opens, so quota and status are current. */
+const STALE_MS = 6 * 60 * 60 * 1000
+
+const GEMINI_SHARED = 'Kunci Gemini dipakai bersama oleh penyusun cerita dan suara narator Gemini TTS, jadi keduanya akan berhenti.'
+
+function StatusBadge({ status, checking }: { status?: KeyStatus; checking?: boolean }) {
+  if (checking) return <Badge tone="info">Mengecek…</Badge>
   if (!status?.configured) return <Badge tone="draft">Belum diatur</Badge>
   if (status.lastOk === false) return <Badge tone="bad">Gagal terhubung</Badge>
   if (status.lastOk)
@@ -54,32 +101,65 @@ function StatusBadge({ status }: { status?: KeyStatus }) {
 }
 
 /** One dropdown to choose which provider a section uses; only that provider's settings are shown below it. */
-function ProviderSelect<T extends string>({ value, options, onChange }: { value: T; options: ProviderOption<T>[]; onChange: (id: T) => void }) {
+function ProviderSelect<T extends string>({
+  value,
+  options,
+  label,
+  onChange
+}: {
+  value: T
+  options: ProviderOption<T>[]
+  label: string
+  onChange: (id: T) => void
+}) {
   const [open, setOpen] = useState(false)
-  const root = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent): void => {
-      if (!root.current?.contains(e.target as Node)) setOpen(false)
+  const [active, setActive] = useState(0)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const listId = useId()
+  const current = Math.max(0, options.findIndex((o) => o.id === value))
+  const cur = options[current]
+
+  const show = (): void => {
+    setActive(current)
+    setOpen(true)
+  }
+  const pick = (o: ProviderOption<T>): void => {
+    setOpen(false)
+    trigger.current?.focus()
+    if (o.id !== value) onChange(o.id)
+  }
+  // Focus stays on the trigger and the arrows move the highlight (aria-activedescendant), like a native listbox.
+  const onKey = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (!open) {
+      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) {
+        e.preventDefault()
+        show()
+      }
+      return
     }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    window.addEventListener('mousedown', onDown)
-    window.addEventListener('keydown', onKey)
-    return () => {
-      window.removeEventListener('mousedown', onDown)
-      window.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-  const cur = options.find((o) => o.id === value) ?? options[0]
+    const n = options.length
+    if (e.key === 'Tab') return setOpen(false)
+    if (e.key === 'ArrowDown') setActive((a) => (a + 1) % n)
+    else if (e.key === 'ArrowUp') setActive((a) => (a - 1 + n) % n)
+    else if (e.key === 'Home') setActive(0)
+    else if (e.key === 'End') setActive(n - 1)
+    else if (e.key === 'Enter' || e.key === ' ') pick(options[active])
+    else return
+    e.preventDefault()
+  }
+
   return (
-    <div ref={root} className="relative">
+    <>
       <button
+        ref={trigger}
         type="button"
+        aria-label={`${label}: ${cur.name}`}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen(!open)}
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open ? `${listId}-${options[active]?.id}` : undefined}
+        onClick={() => (open ? setOpen(false) : show())}
+        onKeyDown={onKey}
         className={cx(
           'flex w-full items-center gap-3 rounded-2xl border-[1.5px] border-ink bg-surface px-4 py-3 text-left transition-shadow',
           open ? 'shadow-none' : 'shadow-ink hover:shadow-ink-md'
@@ -90,38 +170,100 @@ function ProviderSelect<T extends string>({ value, options, onChange }: { value:
           <span className="text-base font-bold">{cur.name}</span>
           <span className="truncate text-[13px] text-ink-2">{cur.note}</span>
         </span>
-        <StatusBadge status={cur.status} />
+        <StatusBadge status={cur.status} checking={cur.checking} />
         <ChevronDown className={cx('size-5 shrink-0 transition-transform', open && 'rotate-180')} />
       </button>
-      {open && (
-        <div role="listbox" className="absolute inset-x-0 top-full z-40 mt-1.5 flex flex-col gap-0.5 rounded-2xl border-[1.5px] border-ink bg-surface p-1.5 shadow-ink-lg">
-          {options.map((o) => {
+      <Popover
+        anchor={trigger}
+        open={open}
+        label={label}
+        onClose={(reason) => {
+          setOpen(false)
+          if (reason === 'escape') trigger.current?.focus()
+        }}
+      >
+        <div id={listId} role="listbox" aria-label={label} className="scroll-thin flex flex-col gap-0.5 overflow-y-auto p-1.5">
+          {options.map((o, i) => {
             const on = o.id === value
             return (
-              <button
+              <div
                 key={o.id}
-                type="button"
+                id={`${listId}-${o.id}`}
                 role="option"
                 aria-selected={on}
-                onClick={() => {
-                  setOpen(false)
-                  if (!on) onChange(o.id)
-                }}
-                className={cx('flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left', on ? 'bg-accent-soft' : 'hover:bg-sand')}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => pick(o)}
+                className={cx(
+                  'flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-left',
+                  on ? 'bg-accent-soft' : i === active && 'bg-sand'
+                )}
               >
                 <ProviderLogo id={o.logo} size={36} />
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="text-[15px] font-semibold">{o.name}</span>
                   <span className="truncate text-[13px] text-ink-2">{o.note}</span>
                 </span>
-                <StatusBadge status={o.status} />
+                <StatusBadge status={o.status} checking={o.checking} />
                 <span className="flex size-5 shrink-0 items-center justify-center">{on && <Check className="size-4 text-accent" strokeWidth={2.6} />}</span>
-              </button>
+              </div>
             )
           })}
         </div>
+      </Popover>
+    </>
+  )
+}
+
+/**
+ * The frame every service shares: title, provider choice, a warning while the chosen provider cannot be
+ * used yet, and the provider's own settings.
+ */
+function ServiceShell<T extends string>({
+  id,
+  icon,
+  title,
+  sub,
+  feature,
+  value,
+  options,
+  onChange,
+  children
+}: {
+  id: string
+  icon: ReactNode
+  title: string
+  sub: ReactNode
+  /** What stops working while the provider is not ready, e.g. "Penyusunan naskah". */
+  feature: string
+  value: T
+  options: ProviderOption<T>[]
+  onChange: (id: T) => void
+  children: ReactNode
+}) {
+  const cur = options.find((o) => o.id === value)
+  const status = cur?.status
+  const what = value === 'custom' ? 'alamatnya' : 'kuncinya'
+  const problem = cur?.checking || isReady(status)
+    ? null
+    : !status?.configured
+      ? `${cur?.name} belum diatur.`
+      : status.unreadable
+        ? `Kunci ${cur?.name} tidak bisa dibuka lagi.`
+        : `${cur?.name} gagal terhubung pada tes terakhir.`
+  return (
+    <section id={id} className="flex scroll-mt-6 flex-col gap-3.5">
+      <SectionTitle icon={icon} title={title} sub={sub} />
+      <ProviderSelect value={value} options={options} label={title} onChange={onChange} />
+      {problem && (
+        <p role="status" className="flex items-start gap-2 rounded-xl border border-sun bg-sun-soft px-3.5 py-2.5 text-[13px] leading-snug text-sun-ink">
+          <AlertTriangle className="mt-px size-4 shrink-0" />
+          <span>
+            {problem} {feature} belum bisa dipakai sampai {what} tersimpan dan lolos tes.
+          </span>
+        </p>
       )}
-    </div>
+      <Card key={value}>{children}</Card>
+    </section>
   )
 }
 
@@ -137,6 +279,7 @@ function KeyForm({
   link,
   linkLabel,
   customUrl,
+  clearWarning,
   onChanged,
   onSaved
 }: {
@@ -150,12 +293,14 @@ function KeyForm({
   link: string | null
   linkLabel: string
   customUrl?: string
+  /** Extra line in the delete dialog, e.g. when other features share this key. */
+  clearWarning?: string
   onChanged: () => void
   onSaved?: (r: KeyTestResult) => void
 }) {
   const { toast } = useApp()
   const configured = !!status?.configured
-  const isCustom = provider === 'custom'
+  const isCustom = provider === 'custom' || provider === 'custom-media'
   const preview = status?.preview ?? null
   const [editing, setEditing] = useState(!preview)
   const [key, setKey] = useState('')
@@ -171,12 +316,21 @@ function KeyForm({
     setRevealed(null)
   }, [preview])
 
+  // A revealed key should not stay on screen for whoever walks by later.
+  useEffect(() => {
+    if (!revealed) return
+    const t = window.setTimeout(() => setRevealed(null), 30_000)
+    return () => window.clearTimeout(t)
+  }, [revealed])
+
+  const typed = cleanKey(key)
   // The stored key is shown masked; the custom endpoint keeps an editable (optional) key field.
   const showStored = !isCustom && !editing && !!preview
   const urlChanged = isCustom && url.trim() !== (customUrl ?? '').trim()
-  const canSave = isCustom ? !!url.trim() && (urlChanged || !!key.trim() || !configured) : !showStored && !!key.trim()
+  const canSave = isCustom ? !!url.trim() && (urlChanged || !!typed || !configured) : !showStored && !!typed
   // A pasted key only counts once it is saved; Enter saves it too.
-  const unsaved = !isCustom && !showStored && !!key.trim() && busy !== 'save'
+  const unsaved = !isCustom && !showStored && !!typed && busy !== 'save'
+  const formatWarning = !isCustom && !showStored ? keyFormatWarning(provider, typed) : null
   const onEnter = (e: React.KeyboardEvent<HTMLInputElement>): void => {
     if (e.key !== 'Enter' || !canSave || busy) return
     e.preventDefault()
@@ -186,8 +340,14 @@ function KeyForm({
   const save = async (): Promise<void> => {
     setBusy('save')
     try {
-      const r = isCustom ? await window.api.settings.setCustom(url, key) : await window.api.settings.setKey(provider, key)
-      toast(r.ok ? 'success' : 'error', `${name}: ${r.message}`)
+      const r =
+        provider === 'custom-media'
+          ? await window.api.settings.setCustomMedia(url, key)
+          : isCustom
+            ? await window.api.settings.setCustom(url, key)
+            : await window.api.settings.setKey(provider, key)
+      // Main stores the key before testing it, so a failed test still leaves it saved; say so.
+      toast(r.ok ? 'success' : 'error', r.ok ? `${name}: ${r.message}` : `${name}: ${isCustom ? 'alamat' : 'kunci'} tersimpan, tapi tesnya gagal. ${r.message}`)
       setKey('')
       setEditing(false)
       onChanged()
@@ -214,6 +374,8 @@ function KeyForm({
       const r = await window.api.settings.testKey(provider)
       toast(r.ok ? 'success' : 'error', `${name}: ${r.message}`)
       onChanged()
+    } catch (e) {
+      toast('error', errorText(e))
     } finally {
       setBusy(null)
     }
@@ -222,13 +384,32 @@ function KeyForm({
   const clear = async (): Promise<void> => {
     const ok = await confirmDialog({
       title: `Hapus ${isCustom ? 'endpoint' : 'kunci'} ${name}?`,
-      body: 'Data ini akan dihapus dari komputer ini. Kamu bisa menambahkannya lagi kapan saja.',
+      body: `${isCustom ? 'Alamat dan kunci endpoint ini' : 'Kunci ini'} akan dihapus dari komputer ini.${clearWarning ? ` ${clearWarning}` : ''} Kamu bisa menambahkannya lagi kapan saja.`,
       confirm: 'Hapus',
       danger: true
     })
     if (!ok) return
     await window.api.settings.clearKey(provider)
     setUrl('')
+    onChanged()
+  }
+
+  // Local servers work without a key, so the custom endpoint can drop just its key and keep the address.
+  const clearKeyOnly = async (): Promise<void> => {
+    const ok = await confirmDialog({
+      title: `Hapus kunci ${name}?`,
+      body: 'Alamat endpoint tetap tersimpan. Permintaan berikutnya dikirim tanpa kunci.',
+      confirm: 'Hapus kunci',
+      danger: true
+    })
+    if (!ok) return
+    try {
+      await window.api.settings.clearKey(provider, true)
+      const r = await window.api.settings.testKey(provider)
+      toast(r.ok ? 'success' : 'error', `${name}: kunci dihapus · ${r.message}`)
+    } catch (e) {
+      toast('error', errorText(e))
+    }
     onChanged()
   }
 
@@ -241,7 +422,7 @@ function KeyForm({
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               onKeyDown={onEnter}
-              placeholder="http://localhost:11434/v1"
+              placeholder={provider === 'custom-media' ? 'http://localhost:8000' : 'http://localhost:11434/v1'}
               spellCheck={false}
               className={cx(inputCls, 'h-11 font-mono text-sm')}
             />
@@ -275,7 +456,7 @@ function KeyForm({
               <button
                 type="button"
                 aria-label={visible ? 'Sembunyikan kunci' : 'Tampilkan kunci'}
-                title={visible ? 'Sembunyikan kunci' : 'Tampilkan kunci'}
+                title={visible ? 'Sembunyikan kunci' : 'Tampilkan kunci (tersembunyi lagi setelah 30 detik)'}
                 onClick={() => void toggleEye()}
                 className="absolute right-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-lg text-muted hover:bg-sand hover:text-ink"
               >
@@ -322,14 +503,25 @@ function KeyForm({
           </>
         )}
       </div>
+      {formatWarning && (
+        <p className="-mt-1 flex items-start gap-1.5 text-[13px] text-sun-ink">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+          {formatWarning} Periksa lagi kuncinya, atau simpan saja kalau kamu yakin.
+        </p>
+      )}
       {unsaved && <p className="-mt-1 text-[13px] font-semibold text-accent-dark">Kunci belum tersimpan. Tekan Enter atau klik Simpan dan tes.</p>}
       {hint && <p className="-mt-1 text-[13px] text-ink-2">{hint}</p>}
-      <div className="flex items-center gap-2 text-[13px] text-ink-2">
+      <div className="flex items-center gap-3 text-[13px] text-ink-2">
         <span className={cx('flex-1', configured && status?.lastOk === false && 'text-bad-ink')}>
           {configured && status?.lastMessage
             ? `${status.lastMessage}${status.checkedAt && !status.unreadable ? ` · dicek ${relativeTime(status.checkedAt)}` : ''}`
             : help}
         </span>
+        {isCustom && !!preview && (
+          <button type="button" onClick={() => void clearKeyOnly()} className="shrink-0 font-semibold text-bad-ink hover:underline">
+            Hapus kunci saja
+          </button>
+        )}
         {link && (
           <button
             type="button"
@@ -361,14 +553,14 @@ function SectionTitle({ icon, title, sub }: { icon: ReactNode; title: string; su
   )
 }
 
-function LlmSection({ settings, statusOf, onChanged, onSettings }: { settings: AppSettings; statusOf: (p: ApiProvider) => KeyStatus | undefined; onChanged: () => void; onSettings: (s: AppSettings) => void }) {
+function LlmSection({ settings, statusOf, checking, onChanged, onSettings }: SectionProps) {
   const { toast } = useApp()
   const provider = settings.llmProvider
   const spec = LLM_PROVIDERS.find((p) => p.id === provider)!
   const status = statusOf(provider)
   const configured = !!status?.configured
   const [openPicker, setOpenPicker] = useState(false)
-  const models = useModels(provider, configured && status?.lastOk !== false, provider === 'custom' ? settings.customBaseUrl : '')
+  const models = useModels(provider, isReady(status), provider === 'custom' ? settings.customBaseUrl : '')
   const model = settings.llmModels[provider]
   const selected = models.models.find((m) => m.id === model)
 
@@ -377,148 +569,164 @@ function LlmSection({ settings, statusOf, onChanged, onSettings }: { settings: A
     name: p.name,
     note: p.note,
     logo: p.id,
-    status: statusOf(p.id)
+    status: statusOf(p.id),
+    checking: checking.includes(p.id)
   }))
 
   return (
-    <>
-      <SectionTitle
-        icon={<Cpu className="size-5" />}
-        title="Penyusun cerita (AI LLM)"
-        sub="Pilih satu penyedia untuk menyusun klip, naskah, dan pemeran. Hanya penyedia yang dipilih yang dipakai."
-      />
-      <ProviderSelect
-        value={provider}
-        options={options}
-        onChange={async (id) => {
-          setOpenPicker(false)
-          onSettings(await window.api.settings.set({ llmProvider: id }))
+    <ServiceShell
+      id="svc-llm"
+      icon={<Cpu className="size-5" />}
+      title="Penyusun cerita (AI LLM)"
+      sub="Pilih satu penyedia untuk menyusun klip, naskah, dan pemeran. Hanya penyedia yang dipilih yang dipakai."
+      feature="Penyusunan naskah dan rencana visual"
+      value={provider}
+      options={options}
+      onChange={async (id) => {
+        setOpenPicker(false)
+        onSettings(await window.api.settings.set({ llmProvider: id }))
+      }}
+    >
+      <KeyForm
+        provider={provider}
+        name={spec.name}
+        status={status}
+        help={provider === 'custom' ? 'Contoh: http://localhost:11434/v1 untuk Ollama, http://localhost:1234/v1 untuk LM Studio, https://api.x.ai/v1 untuk Grok.' : 'Setelah kunci disimpan, daftar model diambil langsung dari penyedianya.'}
+        hint={provider === 'gemini' && settings.defaultTtsProvider === 'gemini' ? 'Kunci ini dipakai bersama untuk suara narator Gemini TTS.' : undefined}
+        link={spec.link}
+        linkLabel={spec.linkLabel}
+        customUrl={settings.customBaseUrl}
+        clearWarning={provider === 'gemini' ? GEMINI_SHARED : undefined}
+        onChanged={onChanged}
+        onSaved={async (r) => {
+          if (!r.ok) return
+          onSettings(await window.api.settings.get())
+          if (configured) void models.refresh()
+          if (!model) setOpenPicker(true)
         }}
       />
-      <Card key={provider}>
-        <KeyForm
-          provider={provider}
-          name={spec.name}
-          status={status}
-          help={provider === 'custom' ? 'Contoh: http://localhost:11434/v1 untuk Ollama, http://localhost:1234/v1 untuk LM Studio, https://api.x.ai/v1 untuk Grok.' : 'Setelah kunci disimpan, daftar model diambil langsung dari penyedianya.'}
-          hint={provider === 'gemini' && settings.defaultTtsProvider === 'gemini' ? 'Kunci ini dipakai bersama untuk suara narator Gemini TTS.' : undefined}
-          link={spec.link}
-          linkLabel={spec.linkLabel}
-          customUrl={settings.customBaseUrl}
-          onChanged={onChanged}
-          onSaved={async (r) => {
-            if (!r.ok) return
-            onSettings(await window.api.settings.get())
-            if (configured) void models.refresh()
-            if (!model) setOpenPicker(true)
-          }}
-        />
-        {configured && status?.lastOk !== false && (
-          <div className="flex flex-col gap-1.5 border-t border-dashed border-line pt-4">
-            <span className="text-sm font-semibold">Model untuk menyusun cerita</span>
-            <ModelPicker
-              value={model}
-              models={models.models}
-              loading={models.loading}
-              error={models.error}
-              fetchedAt={models.fetchedAt}
-              onChange={async (id) => {
-                setOpenPicker(false)
-                onSettings(await window.api.settings.set({ llmModels: { ...settings.llmModels, [provider]: id } }))
-                toast('success', `Cerita akan disusun oleh ${spec.name} · ${id}`)
-              }}
-              onRefresh={() => void models.refresh()}
-              allowCustom={provider === 'custom'}
-              defaultOpen={openPicker}
-              placeholder="Pilih model dari daftar"
-            />
-            {selected?.description && <p className="line-clamp-2 text-[13px] text-muted">{selected.description}</p>}
-            {selected && provider === 'openrouter' && !selected.tags.includes('JSON') && (
-              <p className="text-[13px] text-sun-ink">
-                Model ini tidak mendukung output JSON terstruktur. Aplikasi tetap mencoba, tapi model berlabel JSON biasanya lebih stabil.
-              </p>
-            )}
-          </div>
-        )}
-      </Card>
-    </>
+      {isReady(status) && (
+        <div className="flex flex-col gap-1.5 border-t border-dashed border-line pt-4">
+          <span className="text-sm font-semibold">Model untuk menyusun cerita</span>
+          <ModelPicker
+            value={model}
+            models={models.models}
+            loading={models.loading}
+            error={models.error}
+            fetchedAt={models.fetchedAt}
+            onChange={async (id) => {
+              setOpenPicker(false)
+              onSettings(await window.api.settings.set({ llmModels: { ...settings.llmModels, [provider]: id } }))
+              toast('success', `Cerita akan disusun oleh ${spec.name} · ${id}`)
+            }}
+            onRefresh={() => void models.refresh()}
+            allowCustom={provider === 'custom'}
+            defaultOpen={openPicker}
+            placeholder="Pilih model dari daftar"
+          />
+          {selected?.description && <p className="line-clamp-2 text-[13px] text-muted">{selected.description}</p>}
+          {selected && provider === 'openrouter' && !selected.tags.includes('JSON') && (
+            <p className="text-[13px] text-sun-ink">
+              Model ini tidak mendukung output JSON terstruktur. Aplikasi tetap mencoba, tapi model berlabel JSON biasanya lebih stabil.
+            </p>
+          )}
+        </div>
+      )}
+    </ServiceShell>
   )
 }
 
-function TtsSection({ settings, statusOf, onChanged, onSettings }: { settings: AppSettings; statusOf: (p: ApiProvider) => KeyStatus | undefined; onChanged: () => void; onSettings: (s: AppSettings) => void }) {
+function TtsSection({ settings, statusOf, checking, onChanged, onSettings }: SectionProps) {
   const provider = settings.defaultTtsProvider
   const status = statusOf(provider)
-  const ready = !!status?.configured && status.lastOk !== false
+  const ready = isReady(status)
   const models = useModels(provider === 'gemini' ? 'gemini-tts' : 'elevenlabs', ready)
-  const options: ProviderOption<TtsProvider>[] = [
-    {
-      id: 'gemini',
-      name: 'Gemini TTS',
-      note: 'Suara Google Gemini, 30 pilihan suara, mendukung bahasa Indonesia.',
-      logo: 'gemini',
-      status: statusOf('gemini')
-    },
-    {
-      id: 'elevenlabs',
-      name: 'ElevenLabs',
-      note: 'Suara sangat natural dengan waktu kata yang presisi untuk caption karaoke.',
-      logo: 'elevenlabs',
-      status: statusOf('elevenlabs')
-    }
-  ]
+  const options: ProviderOption<TtsProvider>[] = TTS_OPTIONS.map((o) => ({ ...o, status: statusOf(o.id), checking: checking.includes(o.id) }))
   const value = provider === 'gemini' ? settings.geminiTtsModel : settings.elevenModel
   return (
-    <>
-      <SectionTitle
-        icon={<Mic className="size-5" />}
-        title="Suara narator (TTS)"
-        sub="Penyedia suara bawaan untuk proyek baru. Setiap proyek tetap bisa memilih sendiri di langkah Ide cerita."
+    <ServiceShell
+      id="svc-tts"
+      icon={<Mic className="size-5" />}
+      title="Suara narator (TTS)"
+      sub="Penyedia suara bawaan untuk proyek baru. Setiap proyek tetap bisa memilih sendiri di langkah Ide cerita."
+      feature="Pembuatan suara narator"
+      value={provider}
+      options={options}
+      onChange={async (id) => onSettings(await window.api.settings.set({ defaultTtsProvider: id }))}
+    >
+      <KeyForm
+        provider={provider}
+        name={provider === 'gemini' ? 'Google Gemini' : 'ElevenLabs'}
+        status={status}
+        help={provider === 'gemini' ? 'Kunci Gemini dari Google AI Studio.' : 'Kunci API dari akun ElevenLabs.'}
+        hint={provider === 'gemini' && settings.llmProvider === 'gemini' ? 'Kunci ini dipakai bersama dengan penyusun cerita Gemini.' : undefined}
+        link={provider === 'gemini' ? 'https://aistudio.google.com/apikey' : 'https://elevenlabs.io/app/settings/api-keys'}
+        linkLabel={provider === 'gemini' ? 'Buat kunci di Google AI Studio' : 'Buat kunci di ElevenLabs'}
+        clearWarning={provider === 'gemini' ? GEMINI_SHARED : undefined}
+        onChanged={onChanged}
+        onSaved={(r) => r.ok && void models.refresh()}
       />
-      <ProviderSelect value={provider} options={options} onChange={async (id) => onSettings(await window.api.settings.set({ defaultTtsProvider: id }))} />
-      <Card key={provider}>
-        <KeyForm
-          provider={provider}
-          name={provider === 'gemini' ? 'Google Gemini' : 'ElevenLabs'}
-          status={status}
-          help={provider === 'gemini' ? 'Kunci Gemini dari Google AI Studio.' : 'Kunci API dari akun ElevenLabs.'}
-          hint={provider === 'gemini' && settings.llmProvider === 'gemini' ? 'Kunci ini dipakai bersama dengan penyusun cerita Gemini.' : undefined}
-          link={provider === 'gemini' ? 'https://aistudio.google.com/apikey' : 'https://elevenlabs.io/app/settings/api-keys'}
-          linkLabel={provider === 'gemini' ? 'Buat kunci di Google AI Studio' : 'Buat kunci di ElevenLabs'}
-          onChanged={onChanged}
-          onSaved={(r) => r.ok && void models.refresh()}
-        />
-        {ready && (
-          <div className="flex flex-col gap-1.5 border-t border-dashed border-line pt-4">
-            <span className="text-sm font-semibold">Model suara</span>
-            <ModelPicker
-              value={value}
-              models={models.models}
-              loading={models.loading}
-              error={models.error}
-              fetchedAt={models.fetchedAt}
-              onChange={async (id) => onSettings(await window.api.settings.set(provider === 'gemini' ? { geminiTtsModel: id } : { elevenModel: id }))}
-              onRefresh={() => void models.refresh()}
-            />
-          </div>
-        )}
-      </Card>
-    </>
+      {ready && (
+        <div className="flex flex-col gap-1.5 border-t border-dashed border-line pt-4">
+          <span className="text-sm font-semibold">Model suara</span>
+          <ModelPicker
+            value={value}
+            models={models.models}
+            loading={models.loading}
+            error={models.error}
+            fetchedAt={models.fetchedAt}
+            onChange={async (id) => onSettings(await window.api.settings.set(provider === 'gemini' ? { geminiTtsModel: id } : { elevenModel: id }))}
+            onRefresh={() => void models.refresh()}
+          />
+        </div>
+      )}
+    </ServiceShell>
   )
 }
 
-function HiggsfieldSection({ status, onChanged }: { status?: KeyStatus; onChanged: () => void }) {
+function HiggsfieldSection({ settings, statusOf, checking, onChanged, onSettings }: SectionProps) {
+  const { toast } = useApp()
+  const provider: MediaProvider = settings.mediaProvider ?? 'higgsfield'
+  const isCustom = provider === 'custom'
+  const status = statusOf(mediaKey(settings))
+  const ready = isReady(status)
+  const [openImagePicker, setOpenImagePicker] = useState(false)
+  const [openVideoPicker, setOpenVideoPicker] = useState(false)
+
+  const imageOptions = useMemo(() => hfModelOptions('image'), [])
+  const videoOptions = useMemo(() => hfModelOptions('video'), [])
+
+  const currentImage = getImageModel(settings.imageModel)
+  const currentVideo = getVideoModel(settings.videoModel)
+
+  const selectedImage = imageOptions.find((m) => m.id === currentImage.id)
+  const selectedVideo = videoOptions.find((m) => m.id === currentVideo.id)
+
+  const options: ProviderOption<MediaProvider>[] = MEDIA_OPTIONS.map((o) => {
+    const key: ApiProvider = o.id === 'custom' ? 'custom-media' : 'higgsfield'
+    return { ...o, status: statusOf(key), checking: checking.includes(key) }
+  })
+
+  const onSaved = async (r: KeyTestResult): Promise<void> => {
+    if (r.ok) onSettings(await window.api.settings.get())
+  }
+
   return (
-    <>
-      <SectionTitle icon={<ImageIcon className="size-5" />} title="Gambar dan video" sub="Higgsfield membuat gambar klip, lembar karakter, dan video AI." />
-      <Card>
-        <div className="flex items-center gap-3">
-          <ProviderLogo id="higgsfield" />
-          <div className="flex flex-1 flex-col">
-            <span className="text-base font-bold">Higgsfield</span>
-            <span className="text-[13px] text-ink-2">GPT Image 2.5, Kling, Seedance, dan model lain dari akun Higgsfield kamu</span>
-          </div>
-          <StatusBadge status={status} />
-        </div>
+    <ServiceShell
+      id="svc-media"
+      icon={<ImageIcon className="size-5" />}
+      title="Gambar dan video"
+      sub="Pilih satu penyedia untuk membuat gambar klip, lembar karakter, dan animasi video AI."
+      feature="Pembuatan gambar dan video"
+      value={provider}
+      options={options}
+      onChange={async (id) => {
+        setOpenImagePicker(false)
+        setOpenVideoPicker(false)
+        onSettings(await window.api.settings.set({ mediaProvider: id }))
+      }}
+    >
+      {provider === 'higgsfield' ? (
         <KeyForm
           provider="higgsfield"
           name="Higgsfield"
@@ -532,29 +740,151 @@ function HiggsfieldSection({ status, onChanged }: { status?: KeyStatus; onChange
             </>
           }
           help="Kunci dicek dengan permintaan estimasi biaya, tanpa memakai kredit."
-          link="https://higgsfield.ai/s/higgsfield-api-yt-bangtutorial-lPMrHK"
-          linkLabel="Buka console Higgsfield"
+          link="https://higgsfield.ai"
+          linkLabel="Buka Higgsfield"
           onChanged={onChanged}
+          onSaved={onSaved}
         />
-        <p className="flex items-start gap-2.5 border-t border-dashed border-line pt-4 text-[13px] leading-relaxed text-ink-2">
-          <Film className="mt-0.5 size-4 shrink-0" />
-          <span>
-            Semua {HF_IMAGE_MODELS.length} model gambar dan {HF_VIDEO_MODELS.length} model video Higgsfield bisa dipakai. Modelnya dipilih per proyek
-            di langkah <strong className="text-ink">Ide cerita</strong>, bagian Model AI.
-          </span>
-        </p>
-      </Card>
-    </>
+      ) : (
+        <KeyForm
+          provider="custom-media"
+          name="Endpoint custom"
+          status={status}
+          customUrl={settings.customMediaBaseUrl}
+          placeholder="Kosongkan jika server lokal tidak memerlukan kunci"
+          hint="Alamat server mandiri yang kompatibel dengan format API Higgsfield. Kunci hanya dikirim ke server tempat kunci itu disimpan."
+          help="Contoh: http://localhost:8000 untuk server mock atau proxy lokal."
+          link={null}
+          linkLabel=""
+          onChanged={onChanged}
+          onSaved={onSaved}
+        />
+      )}
+      {ready && (
+        <>
+          <div className="flex flex-col gap-1.5 border-t border-dashed border-line pt-4">
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <ImageIcon className="size-4 text-ink-2" />
+              Model gambar bawaan
+            </span>
+            <ModelPicker
+              value={currentImage.id}
+              models={imageOptions}
+              renderIcon={(m) => <ModelLogo family={m.family} />}
+              detail="description"
+              tagFilters={['Rekomendasi', 'Referensi', 'GPT Image', 'Soul', 'Recraft', '4K']}
+              defaultOpen={openImagePicker}
+              allowCustom={isCustom}
+              placeholder="Pilih model gambar dari daftar"
+              onChange={async (id) => {
+                setOpenImagePicker(false)
+                onSettings(await window.api.settings.set({ imageModel: id }))
+                toast('success', `Model gambar bawaan: ${getImageModel(id).name}`)
+              }}
+            />
+            {selectedImage?.description && <p className="line-clamp-2 text-[13px] text-muted">{selectedImage.description}</p>}
+            <p className="flex items-start gap-1.5 text-[12.5px] leading-snug text-muted">
+              <Users className="mt-px size-3.5 shrink-0" />
+              {maxRefs(currentImage)
+                ? `Mendukung lembar karakter (maksimal ${maxRefs(currentImage)} tokoh), wajah dan kostum tokoh konsisten di tiap klip.`
+                : 'Tanpa lembar karakter, tampilan tokoh bisa sedikit berubah antar klip.'}
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1.5 border-t border-dashed border-line pt-4">
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <Film className="size-4 text-ink-2" />
+              Model video bawaan
+            </span>
+            <ModelPicker
+              value={currentVideo.id}
+              models={videoOptions}
+              renderIcon={(m) => <ModelLogo family={m.family} />}
+              detail="description"
+              tagFilters={['Rekomendasi', 'Kling', 'Seedance', 'Wan', 'Referensi', '4K']}
+              defaultOpen={openVideoPicker}
+              allowCustom={isCustom}
+              placeholder="Pilih model video dari daftar"
+              onChange={async (id) => {
+                setOpenVideoPicker(false)
+                onSettings(await window.api.settings.set({ videoModel: id }))
+                toast('success', `Model video bawaan: ${getVideoModel(id).name}`)
+              }}
+            />
+            {selectedVideo?.description && <p className="line-clamp-2 text-[13px] text-muted">{selectedVideo.description}</p>}
+          </div>
+        </>
+      )}
+      <p className="flex items-start gap-2.5 border-t border-dashed border-line pt-4 text-[13px] leading-relaxed text-ink-2">
+        <Film className="mt-0.5 size-4 shrink-0" />
+        <span>
+          {isCustom
+            ? 'Model di atas adalah pilihan bawaan untuk proyek baru. Kamu bisa memilih dari daftar atau mengetik nama model custom.'
+            : `Model di atas adalah pilihan bawaan untuk proyek baru (${HF_IMAGE_MODELS.length} model gambar dan ${HF_VIDEO_MODELS.length} model video tersedia). Setiap proyek tetap bisa memilih modelnya sendiri di langkah Ide cerita.`}
+        </span>
+      </p>
+    </ServiceShell>
   )
+}
+
+interface SummaryRow {
+  id: string
+  label: string
+  provider: string
+  badge: ReactNode
+  ready: boolean
+  optional?: boolean
+}
+
+/** One glance at which services can run, with a jump to each section. */
+function ServiceSummary({ rows }: { rows: SummaryRow[] }) {
+  const main = rows.filter((r) => !r.optional)
+  const ready = main.filter((r) => r.ready).length
+  return (
+    <section aria-label="Ringkasan layanan" className="flex flex-col gap-3 rounded-2xl border border-line bg-surface px-5 py-4">
+      <p className="text-sm font-semibold">
+        {ready === main.length ? 'Semua layanan utama siap dipakai.' : `${ready} dari ${main.length} layanan utama siap. Lengkapi yang belum supaya video bisa dibuat dari awal sampai akhir.`}
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        {rows.map((r) => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => document.getElementById(r.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            className="flex items-center gap-3 rounded-xl border border-line px-3.5 py-2.5 text-left hover:bg-sand"
+          >
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-[12.5px] text-ink-2">
+                {r.label}
+                {r.optional && ' · opsional'}
+              </span>
+              <span className="truncate text-[14px] font-semibold">{r.provider}</span>
+            </span>
+            {r.badge}
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function whisperBadge(w: WhisperStatus | null): ReactNode {
+  if (w?.state === 'ready') return <Badge tone="ok">Siap dipakai</Badge>
+  if (w?.state === 'downloading' || w?.state === 'verifying') return <Badge tone="warn">Mengunduh</Badge>
+  return <Badge tone="draft">Belum diunduh</Badge>
 }
 
 export function Settings() {
   const { go, route } = useApp()
   const back = route.name === 'settings' && route.back ? route.back : ({ name: 'home' } as const)
   const [tab, setTab] = useState<Tab>('services')
-  const [keys, setKeys] = useState<KeyStatus[]>([])
+  const [keys, setKeys] = useState<KeyStatus[] | null>(null)
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [folder, setFolder] = useState('')
+  const [encrypted, setEncrypted] = useState(true)
+  const [whisper, setWhisper] = useState<WhisperStatus | null>(null)
+  const [checking, setChecking] = useState<ApiProvider[]>([])
+  const autoChecked = useRef(false)
 
   const reload = (): void => {
     void window.api.settings.keys().then(setKeys)
@@ -563,15 +893,52 @@ export function Settings() {
   useEffect(() => {
     reload()
     void window.api.exporter.defaultFolder().then(setFolder)
+    void window.api.settings.encryption().then(setEncrypted)
+    void window.api.whisper.status().then(setWhisper)
+    return window.api.on.whisper(setWhisper)
   }, [])
 
-  const statusOf = (p: ApiProvider): KeyStatus | undefined => keys.find((k) => k.provider === p)
+  const statusOf: StatusOf = (p) => keys?.find((k) => k.provider === p)
 
-  const NAV: { id: Tab; label: string; icon: ReactNode }[] = [
-    { id: 'services', label: 'Layanan AI dan kunci', icon: <KeyRound className="size-[18px]" /> },
+  // A status from days ago can hide an expired key or a used-up quota, so re-test the providers in use once, quietly.
+  useEffect(() => {
+    if (autoChecked.current || !settings || !keys) return
+    autoChecked.current = true
+    const stale = Date.now() - STALE_MS
+    const due = [...new Set(activeProviders(settings))].filter((p) => {
+      const s = keys.find((k) => k.provider === p)
+      return !!s?.configured && !s.unreadable && (s.checkedAt ?? 0) < stale
+    })
+    if (!due.length) return
+    setChecking(due)
+    void Promise.allSettled(due.map((p) => window.api.settings.testKey(p))).then(() => {
+      setChecking([])
+      reload()
+    })
+  }, [settings, keys])
+
+  const llmName = settings ? (LLM_PROVIDERS.find((p) => p.id === settings.llmProvider)?.name ?? settings.llmProvider) : ''
+  const summary: SummaryRow[] = settings
+    ? [
+        { id: 'svc-llm', label: 'Penyusun cerita', provider: llmName, key: settings.llmProvider },
+        { id: 'svc-tts', label: 'Suara narator', provider: TTS_OPTIONS.find((o) => o.id === settings.defaultTtsProvider)!.name, key: settings.defaultTtsProvider },
+        { id: 'svc-media', label: 'Gambar dan video', provider: MEDIA_OPTIONS.find((o) => o.id === settings.mediaProvider)?.name ?? 'Higgsfield', key: mediaKey(settings) }
+      ]
+        .map(({ key, ...r }): SummaryRow => ({
+          ...r,
+          ready: isReady(statusOf(key)),
+          badge: <StatusBadge status={statusOf(key)} checking={checking.includes(key)} />
+        }))
+        .concat({ id: 'svc-whisper', label: 'Caption akurat', provider: 'Whisper Small', ready: whisper?.state === 'ready', badge: whisperBadge(whisper), optional: true })
+    : []
+  const needsAttention = !!keys && summary.some((r) => !r.optional && !r.ready)
+
+  const NAV: { id: Tab; label: string; icon: ReactNode; alert?: boolean }[] = [
+    { id: 'services', label: 'Layanan AI dan kunci', icon: <KeyRound className="size-[18px]" />, alert: needsAttention },
     { id: 'general', label: 'Umum', icon: <SlidersHorizontal className="size-[18px]" /> },
     { id: 'about', label: 'Tentang aplikasi', icon: <Info className="size-[18px]" /> }
   ]
+  const sectionProps = settings && { settings, statusOf, checking, onChanged: reload, onSettings: setSettings }
 
   return (
     <div className="flex h-full flex-col">
@@ -600,25 +967,38 @@ export function Settings() {
               )}
             >
               {n.icon}
-              {n.label}
+              <span className="flex-1">{n.label}</span>
+              {n.alert && <span role="img" aria-label="Ada layanan yang belum siap" title="Ada layanan yang belum siap" className="size-2 shrink-0 rounded-full bg-accent" />}
             </button>
           ))}
         </nav>
         <main className="scroll-thin overflow-y-auto">
           <div className="flex max-w-[900px] flex-col gap-3.5 px-14 pb-24 pt-8">
-            {tab === 'services' && settings && (
+            {tab === 'services' && sectionProps && keys && (
               <>
                 <div>
                   <h1 className="font-display text-[34px] font-bold tracking-[-0.015em]">Layanan AI dan kunci</h1>
                   <p className="mt-2 max-w-[700px] text-[15px] text-ink-2">
-                    Bang Story memakai akun layanan milikmu sendiri. Kunci disimpan terenkripsi di komputer ini dan hanya dikirim langsung ke
-                    layanan yang bersangkutan.
+                    Story Maker memakai akun layanan milikmu sendiri. Kunci disimpan {encrypted ? 'terenkripsi ' : ''}di komputer ini dan hanya dikirim
+                    langsung ke layanan yang bersangkutan.
                   </p>
                 </div>
-                <LlmSection settings={settings} statusOf={statusOf} onChanged={reload} onSettings={setSettings} />
-                <TtsSection settings={settings} statusOf={statusOf} onChanged={reload} onSettings={setSettings} />
-                <HiggsfieldSection status={statusOf('higgsfield')} onChanged={reload} />
-                <WhisperSection settings={settings} onSettings={setSettings} />
+                {!encrypted && (
+                  <p role="alert" className="flex items-start gap-2.5 rounded-xl border border-bad-ink/30 bg-bad-soft px-4 py-3 text-[13.5px] leading-relaxed text-bad-ink">
+                    <ShieldAlert className="mt-0.5 size-[18px] shrink-0" />
+                    <span>
+                      Sistem operasi ini tidak menyediakan enkripsi untuk kunci, jadi kunci disimpan sebagai teks biasa di folder data aplikasi. Hindari
+                      memakai kunci dengan limit besar di komputer yang dipakai bersama.
+                    </span>
+                  </p>
+                )}
+                <ServiceSummary rows={summary} />
+                <LlmSection {...sectionProps} />
+                <TtsSection {...sectionProps} />
+                <HiggsfieldSection {...sectionProps} />
+                <div id="svc-whisper" className="flex scroll-mt-6 flex-col gap-3.5">
+                  <WhisperSection settings={sectionProps.settings} onSettings={setSettings} />
+                </div>
               </>
             )}
 

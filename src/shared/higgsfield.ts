@@ -39,11 +39,41 @@ export const DEFAULT_IMAGE_MODEL = 'marketing-studio/image/sunburst'
 export const DEFAULT_VIDEO_MODEL = 'kling-video/v3.0/std/image-to-video'
 
 export function getImageModel(id: string | null | undefined): HfModel {
-  return HF_IMAGE_MODELS.find((m) => m.id === id) ?? HF_IMAGE_MODELS.find((m) => m.id === DEFAULT_IMAGE_MODEL)!
+  const found = HF_IMAGE_MODELS.find((m) => m.id === id)
+  if (found) return found
+  if (id && id.trim()) {
+    return {
+      id: id.trim(),
+      name: id.trim(),
+      family: 'Custom',
+      kind: 'image',
+      input: { field: 'image_url', mode: 'reference', max: 1 },
+      required: [],
+      props: { prompt: { type: 'string' } },
+      durations: null,
+      tags: ['Custom']
+    }
+  }
+  return HF_IMAGE_MODELS.find((m) => m.id === DEFAULT_IMAGE_MODEL)!
 }
 
 export function getVideoModel(id: string | null | undefined): HfModel {
-  return HF_VIDEO_MODELS.find((m) => m.id === id) ?? HF_VIDEO_MODELS.find((m) => m.id === DEFAULT_VIDEO_MODEL)!
+  const found = HF_VIDEO_MODELS.find((m) => m.id === id)
+  if (found) return found
+  if (id && id.trim()) {
+    return {
+      id: id.trim(),
+      name: id.trim(),
+      family: 'Custom',
+      kind: 'video',
+      input: { field: 'image_url', mode: 'first-frame', max: 1 },
+      required: [],
+      props: { prompt: { type: 'string' } },
+      durations: { values: [5, 10] },
+      tags: ['Custom']
+    }
+  }
+  return HF_VIDEO_MODELS.find((m) => m.id === DEFAULT_VIDEO_MODEL)!
 }
 
 /** How many character sheets an image model accepts as references. 0 means sheets are not used. */

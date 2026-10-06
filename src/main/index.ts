@@ -1,6 +1,6 @@
 import { existsSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { app, BrowserWindow, session, shell } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { closeDb, getDb } from './db'
 import { attachDevHarness, prepareHarness } from './devharness'
 import { resumeJobs } from './generation'
@@ -15,13 +15,22 @@ import { warmUpEncryption } from './secrets'
 function useDataFolder(): void {
   if (!app.isPackaged && process.env.STUDIO_USER_DATA) return app.setPath('userData', process.env.STUDIO_USER_DATA)
   const appData = app.getPath('appData')
-  const current = join(appData, 'Bang Story')
-  const legacy = join(appData, 'Studio Cerita')
-  if (!existsSync(current) && existsSync(join(legacy, 'studio.db'))) {
-    try {
-      renameSync(legacy, current)
-    } catch {
-      return app.setPath('userData', legacy)
+  const current = join(appData, 'Story Maker')
+  const legacyBang = join(appData, 'Bang Story')
+  const legacyStudio = join(appData, 'Studio Cerita')
+  if (!existsSync(current)) {
+    if (existsSync(join(legacyBang, 'studio.db'))) {
+      try {
+        renameSync(legacyBang, current)
+      } catch {
+        return app.setPath('userData', legacyBang)
+      }
+    } else if (existsSync(join(legacyStudio, 'studio.db'))) {
+      try {
+        renameSync(legacyStudio, current)
+      } catch {
+        return app.setPath('userData', legacyStudio)
+      }
     }
   }
   app.setPath('userData', current)
@@ -35,17 +44,6 @@ app.commandLine.appendSwitch('disable-direct-composition-video-overlays')
 
 registerSchemes()
 
-/**
- * YouTube only plays embedded videos for embedders that identify themselves with an HTTP Referer, and a
- * page loaded from file:// sends none (the player then shows error 153). The app identifies itself with
- * its app ID, as YouTube asks of apps that are not websites.
- */
-function identifyToYouTube(): void {
-  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ['https://www.youtube.com/embed/*'] }, (details, done) => {
-    done({ requestHeaders: { ...details.requestHeaders, Referer: 'https://id.bangtutorial.bangstory/' } })
-  })
-}
-
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1440,
@@ -55,7 +53,7 @@ function createWindow(): void {
     show: false,
     backgroundColor: '#FAF7F2',
     autoHideMenuBar: true,
-    title: 'Bang Story',
+    title: 'Story Maker',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: true,
@@ -65,7 +63,6 @@ function createWindow(): void {
   })
 
   win.once('ready-to-show', () => win.show())
-  identifyToYouTube()
   attachDevHarness(win)
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -96,7 +93,7 @@ if (!single) {
   })
 
   void app.whenReady().then(() => {
-    app.setAppUserModelId('id.bangtutorial.bangstory')
+    app.setAppUserModelId('id.kucingsakti.storymaker')
     warmUpEncryption()
     getDb()
     handleStudioProtocol()

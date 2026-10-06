@@ -8,6 +8,23 @@ Cara menaikkan versi ada di [docs/pengembangan.md](docs/pengembangan.md#versi-da
 
 ## [Belum dirilis]
 
+### Diubah
+- Aplikasi berganti nama menjadi **Story Maker** (by Kucing Sakti). Folder data `Bang Story` atau `Studio Cerita`
+  dipindahkan otomatis ke `%APPDATA%\Story Maker`. Installer kini bernama `StoryMaker-Setup-<versi>.exe`.
+- Halaman About tidak lagi menampilkan video tutorial dan tautan channel YouTube. Embed YouTube dihapus dari
+  CSP (`frame-src`) beserta header Referer-nya.
+- ID aplikasi menjadi `id.kucingsakti.storymaker`. Windows menganggapnya aplikasi baru: installer ini tidak
+  menimpa Bang Story yang sudah terpasang (copot lewat Settings › Apps), dan pin taskbar lama perlu dipasang
+  ulang. Data proyek tetap dipindahkan otomatis.
+- Tautan di kartu Higgsfield sekarang langsung ke `https://higgsfield.ai`, bukan tautan referral.
+- Pengaturan › Layanan AI dan kunci: ringkasan status layanan, penanda di menu, peringatan saat penyedia yang dipilih
+  belum siap, cek format kunci, dan tes ulang otomatis untuk status yang sudah lama. Kunci yang ditampilkan
+  disembunyikan lagi setelah 30 detik.
+
+### Keamanan
+- Kunci endpoint custom tidak lagi ikut terkirim ke server lain saat alamat endpoint diganti.
+- Peringatan muncul kalau sistem tidak bisa mengenkripsi kunci.
+
 ## [1.0.0] - 2026-10-02
 
 Rilis pertama Bang Story (sebelumnya bernama Studio Cerita).
