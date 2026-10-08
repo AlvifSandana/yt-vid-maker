@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, extname } from 'node:path'
 import { estimateWordTimings } from '@shared/captions'
 import { stripVoiceTags } from '@shared/speech'
 import { getImageModel, getVideoModel, imageBody, maxRefs, promptLimit, videoBody, type HfModel } from '@shared/higgsfield'
@@ -63,6 +63,13 @@ async function publicUrlFor(asset: Asset, signal: AbortSignal): Promise<string> 
   const url = await hf.uploadFile(assetAbsPath(asset.projectId, asset.localPath), signal)
   updateAssetMeta(asset.id, { ...asset.meta, uploadedUrl: url, uploadedAt: Date.now() })
   return url
+}
+
+/** OpenAI-compatible endpoints take reference images inline instead of by URL. */
+function dataUrlFor(asset: Asset): string {
+  const ext = extname(asset.localPath).toLowerCase()
+  const mime = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : 'image/png'
+  return `data:${mime};base64,${readFileSync(assetAbsPath(asset.projectId, asset.localPath)).toString('base64')}`
 }
 
 function imageProgress(ctx: TaskCtx, what: string) {
@@ -141,7 +148,12 @@ async function waitForSheets(characterIds: string[], signal: AbortSignal): Promi
   }
 }
 
-async function referenceUrls(model: HfModel, chars: Character[], signal: AbortSignal): Promise<{ urls: string[]; names: string[] }> {
+async function referenceUrls(
+  model: HfModel,
+  chars: Character[],
+  signal: AbortSignal,
+  inline = false
+): Promise<{ urls: string[]; names: string[] }> {
   const limit = maxRefs(model)
   if (limit === 0) return { urls: [], names: [] }
   await waitForSheets(
@@ -154,7 +166,7 @@ async function referenceUrls(model: HfModel, chars: Character[], signal: AbortSi
     const fresh = getCharacter(c.id)
     const sheet = getAsset(fresh.sheetAssetId)
     if (!sheet || urls.length >= limit) continue
-    urls.push(await publicUrlFor(sheet, signal))
+    urls.push(inline ? dataUrlFor(sheet) : await publicUrlFor(sheet, signal))
     names.push(fresh.name)
   }
   return { urls, names }
@@ -180,7 +192,20 @@ async function finishHiggsfield(ctx: TaskCtx, job: Job, requestId: string, paylo
   if (!url) throw new Error('Higgsfield selesai tanpa file hasil')
   ctx.progress(0.93, 'Mengunduh hasil')
   const { bytes, contentType } = await downloadTo(url, ctx.signal)
-  const rel = saveFile(job.projectId, isVideo ? 'videos' : 'images', extFromType(contentType, url, isVideo ? '.mp4' : '.png'), bytes)
+  return storeResult(job, payload, bytes, contentType, url, requestId)
+}
+
+/** Saves a finished image or video as an asset and puts it where the job was meant to go. */
+async function storeResult(
+  job: Job,
+  payload: HfPayload,
+  bytes: Buffer,
+  contentType: string,
+  url: string | null,
+  requestId: string | null
+): Promise<string> {
+  const isVideo = payload.target === 'clip-video'
+  const rel = saveFile(job.projectId, isVideo ? 'videos' : 'images', extFromType(contentType, url ?? '', isVideo ? '.mp4' : '.png'), bytes)
   const abs = assetAbsPath(job.projectId, rel)
   const size = await probeSize(abs)
   const durationMs = isVideo ? await probeDurationMs(abs).catch(() => null) : null
@@ -231,6 +256,30 @@ function startHiggsfield(job: Job, build: (ctx: TaskCtx) => Promise<{ endpoint: 
   })
 }
 
+/** An OpenAI-compatible endpoint answers with the image itself, so there is no request to poll or resume. */
+function startOpenAiImage(
+  job: Job,
+  build: (ctx: TaskCtx) => Promise<{ model: string; prompt: string; aspect: AspectRatio; refs: string[]; payload: HfPayload }>
+): Job {
+  emit.job(job)
+  return runJob(job, 'higgsfield', async (ctx) => {
+    ctx.progress(0.04, 'Menyiapkan prompt')
+    const { model, prompt, aspect, refs, payload } = await build(ctx)
+    updateJobPayload(job.id, payload)
+    const what = payload.target === 'sheet' ? 'Membuat lembar karakter' : 'Membuat gambar'
+    const started = Date.now()
+    const tick = setInterval(() => ctx.progress(0.15 + 0.75 * (1 - Math.exp(-(Date.now() - started) / 45_000)), what), 1000)
+    try {
+      ctx.progress(0.12, what)
+      const out = await hf.openAiImage(model, prompt, aspect, refs, ctx.signal)
+      ctx.progress(0.93, 'Menyimpan hasil')
+      return await storeResult(job, payload, out.bytes, out.contentType, out.url, null)
+    } finally {
+      clearInterval(tick)
+    }
+  })
+}
+
 function updateJobPayload(jobId: string, payload: HfPayload): void {
   getDb().prepare('UPDATE jobs SET payload_json = ? WHERE id = ?').run(JSON.stringify(payload), jobId)
 }
@@ -242,6 +291,16 @@ export function generateClipImage(clipId: string): Job {
   if (existing) return existing
   const clip = getClip(clipId)
   const job = insertJob({ projectId: clip.projectId, clipId, kind: 'image', provider: 'higgsfield' })
+  if (hf.usesOpenAiImages(getImageModel(getProject(clip.projectId).imageModel).id))
+    return startOpenAiImage(job, async (ctx) => {
+      const fresh = getClip(clipId)
+      const project = getProject(fresh.projectId)
+      const model = getImageModel(project.imageModel)
+      const chars = charactersOf(project.id).filter((c) => fresh.characterIds.includes(c.id))
+      const refs = await referenceUrls(model, chars, ctx.signal, true)
+      const prompt = clipPrompt(project, fresh, chars, refs.names, promptLimit(model))
+      return { model: model.id, prompt, aspect: project.aspectRatio, refs: refs.urls, payload: { target: 'clip-image', model: model.id, prompt } }
+    })
   return startHiggsfield(job, async (ctx) => {
     const fresh = getClip(clipId)
     const project = getProject(fresh.projectId)
@@ -262,6 +321,13 @@ export function generateCharacterSheet(characterId: string): Job {
   if (existing) return existing
   const c = getCharacter(characterId)
   const job = insertJob({ projectId: c.projectId, characterId, kind: 'sheet', provider: 'higgsfield' })
+  if (hf.usesOpenAiImages(getImageModel(getProject(c.projectId).imageModel).id))
+    return startOpenAiImage(job, async () => {
+      const project = getProject(c.projectId)
+      const model = getImageModel(project.imageModel)
+      const prompt = sheetPrompt(project, getCharacter(characterId))
+      return { model: model.id, prompt, aspect: '16:9', refs: [], payload: { target: 'sheet', model: model.id, prompt } }
+    })
   return startHiggsfield(job, async () => {
     const project = getProject(c.projectId)
     const model = getImageModel(project.imageModel)
@@ -426,6 +492,8 @@ export async function estimateCredits(
   resolution?: string | null
 ): Promise<CreditEstimate | null> {
   const model = kind === 'image' ? getImageModel(modelId) : getVideoModel(modelId)
+  // OpenAI-compatible endpoints have no price list to ask.
+  if (kind === 'image' && hf.usesOpenAiImages(model.id)) return null
   const body =
     kind === 'image'
       ? imageBody(model, 'estimate', aspect, [])

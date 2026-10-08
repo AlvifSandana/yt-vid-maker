@@ -3,6 +3,7 @@ import { getSecret, PROVIDER_NAMES } from '../secrets'
 import { getSettings, readCache, writeCache } from '../settings'
 import * as eleven from './elevenlabs'
 import * as gemini from './gemini'
+import * as hf from './higgsfield'
 import { readError } from './http'
 import { extractJson } from './json'
 
@@ -167,11 +168,17 @@ async function fetchModels(source: ModelSource): Promise<ModelOption[]> {
       return groqModels()
     case 'custom':
       return customModels()
+    case 'media-image':
+      return hf.customMediaModels('image')
+    case 'media-video':
+      return hf.customMediaModels('video')
   }
 }
 
 function cacheKey(source: ModelSource): string {
-  return source === 'custom' ? `models:custom:${getSettings().customBaseUrl.trim()}` : `models:${source}`
+  if (source === 'custom') return `models:custom:${getSettings().customBaseUrl.trim()}`
+  if (source === 'media-image' || source === 'media-video') return `models:${source}:${getSettings().customMediaBaseUrl.trim()}`
+  return `models:${source}`
 }
 
 export async function listModels(source: ModelSource, refresh = false): Promise<ModelList> {

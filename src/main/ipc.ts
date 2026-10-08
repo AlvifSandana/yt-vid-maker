@@ -241,13 +241,14 @@ export function registerIpc(): void {
     const url = endpointUrl(baseUrl)
     const dropped = bindCustomKey('custom-media', getSettings().customMediaBaseUrl, url, key)
     setSettings({ customMediaBaseUrl: url })
+    dropCache('models:media-')
     const result = await hf.testCustomMedia(revealSecret('custom-media') ?? undefined, url)
     return recordCustom('custom-media', result, dropped)
   })
   handle('settings:clearKey', (provider: ApiProvider, keyOnly?: boolean) => {
     if (keyOnly && (provider === 'custom' || provider === 'custom-media')) {
       clearSecretValue(provider)
-      if (provider === 'custom') dropCache('models:custom')
+      dropCache(provider === 'custom' ? 'models:custom' : 'models:media-')
       return
     }
     clearSecret(provider)
@@ -255,7 +256,10 @@ export function registerIpc(): void {
     if (provider === 'gemini') dropCache('models:gemini-tts')
     if (provider === 'higgsfield') forgetEstimates()
     if (provider === 'custom') setSettings({ customBaseUrl: '' })
-    if (provider === 'custom-media') setSettings({ customMediaBaseUrl: '' })
+    if (provider === 'custom-media') {
+      setSettings({ customMediaBaseUrl: '' })
+      dropCache('models:media-')
+    }
   })
   handle('models:list', (source: ModelSource, refresh?: boolean) => llm.listModels(source, !!refresh))
   handle('settings:testKey', async (provider: ApiProvider) => {

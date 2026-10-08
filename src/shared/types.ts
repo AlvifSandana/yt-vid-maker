@@ -4,8 +4,8 @@ export type TtsProvider = 'gemini' | 'elevenlabs'
 export type LlmProvider = 'gemini' | 'openrouter' | 'groq' | 'custom'
 export type MediaProvider = 'higgsfield' | 'custom'
 export type ApiProvider = 'higgsfield' | 'gemini' | 'elevenlabs' | 'openrouter' | 'groq' | 'custom' | 'custom-media'
-/** Where a live model list comes from: an LLM provider, or a TTS catalog. */
-export type ModelSource = LlmProvider | 'gemini-tts' | 'elevenlabs'
+/** Where a live model list comes from: an LLM provider, a TTS catalog, or the custom image/video endpoint. */
+export type ModelSource = LlmProvider | 'gemini-tts' | 'elevenlabs' | 'media-image' | 'media-video'
 export type MotionType = 'camera' | 'video'
 export type CameraPresetId = 'zoomin' | 'zoomout' | 'panleft' | 'panright' | 'kenburns' | 'shake' | 'static'
 export type MotionStrength = 'halus' | 'sedang' | 'kuat'

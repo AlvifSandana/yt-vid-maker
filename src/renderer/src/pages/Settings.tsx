@@ -693,8 +693,13 @@ function HiggsfieldSection({ settings, statusOf, checking, onChanged, onSettings
   const [openImagePicker, setOpenImagePicker] = useState(false)
   const [openVideoPicker, setOpenVideoPicker] = useState(false)
 
-  const imageOptions = useMemo(() => hfModelOptions('image'), [])
-  const videoOptions = useMemo(() => hfModelOptions('video'), [])
+  // The custom endpoint lists its own models; Higgsfield's come from the bundled catalog.
+  const customImages = useModels('media-image', ready && isCustom, settings.customMediaBaseUrl)
+  const customVideos = useModels('media-video', ready && isCustom, settings.customMediaBaseUrl)
+  const catalogImages = useMemo(() => hfModelOptions('image'), [])
+  const catalogVideos = useMemo(() => hfModelOptions('video'), [])
+  const imageOptions = isCustom ? customImages.models : catalogImages
+  const videoOptions = isCustom ? customVideos.models : catalogVideos
 
   const currentImage = getImageModel(settings.imageModel)
   const currentVideo = getVideoModel(settings.videoModel)
@@ -708,7 +713,12 @@ function HiggsfieldSection({ settings, statusOf, checking, onChanged, onSettings
   })
 
   const onSaved = async (r: KeyTestResult): Promise<void> => {
-    if (r.ok) onSettings(await window.api.settings.get())
+    if (!r.ok) return
+    onSettings(await window.api.settings.get())
+    if (isCustom) {
+      void customImages.refresh()
+      void customVideos.refresh()
+    }
   }
 
   return (
@@ -770,6 +780,10 @@ function HiggsfieldSection({ settings, statusOf, checking, onChanged, onSettings
             <ModelPicker
               value={currentImage.id}
               models={imageOptions}
+              loading={isCustom && customImages.loading}
+              error={isCustom ? customImages.error : null}
+              fetchedAt={isCustom ? customImages.fetchedAt : null}
+              onRefresh={isCustom ? () => void customImages.refresh() : undefined}
               renderIcon={(m) => <ModelLogo family={m.family} />}
               detail="description"
               tagFilters={['Rekomendasi', 'Referensi', 'GPT Image', 'Soul', 'Recraft', '4K']}
@@ -799,6 +813,10 @@ function HiggsfieldSection({ settings, statusOf, checking, onChanged, onSettings
             <ModelPicker
               value={currentVideo.id}
               models={videoOptions}
+              loading={isCustom && customVideos.loading}
+              error={isCustom ? customVideos.error : null}
+              fetchedAt={isCustom ? customVideos.fetchedAt : null}
+              onRefresh={isCustom ? () => void customVideos.refresh() : undefined}
               renderIcon={(m) => <ModelLogo family={m.family} />}
               detail="description"
               tagFilters={['Rekomendasi', 'Kling', 'Seedance', 'Wan', 'Referensi', '4K']}
@@ -819,7 +837,7 @@ function HiggsfieldSection({ settings, statusOf, checking, onChanged, onSettings
         <Film className="mt-0.5 size-4 shrink-0" />
         <span>
           {isCustom
-            ? 'Model di atas adalah pilihan bawaan untuk proyek baru. Kamu bisa memilih dari daftar atau mengetik nama model custom.'
+            ? 'Model di atas adalah pilihan bawaan untuk proyek baru. Daftarnya diambil dari GET /models di server kamu; kalau model yang kamu mau tidak ada, ketik namanya langsung.'
             : `Model di atas adalah pilihan bawaan untuk proyek baru (${HF_IMAGE_MODELS.length} model gambar dan ${HF_VIDEO_MODELS.length} model video tersedia). Setiap proyek tetap bisa memilih modelnya sendiri di langkah Ide cerita.`}
         </span>
       </p>

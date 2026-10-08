@@ -7,6 +7,7 @@ import { ModelPicker } from '../../components/ModelPicker'
 import { Segmented, Spinner } from '../../components/ui'
 import { creditLabel } from '../../lib/format'
 import { useEstimate, useEstimates } from '../../lib/useEstimate'
+import { useModels } from '../../lib/useModels'
 
 const IMAGE_OPTIONS = hfModelOptions('image')
 const VIDEO_OPTIONS = hfModelOptions('video')
@@ -77,17 +78,27 @@ export function ModelSection({
   const resolution = effectiveResolution(video, project.videoResolution)
   const videoCost = useEstimate('video', video.id, project.aspectRatio, perClip, resolution)
   const [hasKey, setHasKey] = useState<boolean | null>(null)
+  // Set when images and videos come from a custom endpoint: its base URL. Its models come from the server, without credits.
+  const [customUrl, setCustomUrl] = useState<string | null>(null)
 
   useEffect(() => {
     void window.api.settings.keys().then((keys) => setHasKey(!!keys.find((k) => k.provider === 'higgsfield')?.configured))
+    void window.api.settings.get().then((s) => setCustomUrl(s.mediaProvider === 'custom' ? s.customMediaBaseUrl : null))
   }, [])
 
-  const imageCosts = useEstimates('image', IMAGE_IDS, project.aspectRatio, undefined, hasKey === true)
-  const videoCosts = useEstimates('video', VIDEO_IDS, project.aspectRatio, perClip, hasKey === true)
-  const imageModels = useMemo(() => withCosts(IMAGE_OPTIONS, imageCosts, () => '', hasKey === true), [imageCosts, hasKey])
+  const isCustom = customUrl !== null
+  const customImages = useModels('media-image', isCustom, customUrl ?? '')
+  const customVideos = useModels('media-video', isCustom, customUrl ?? '')
+  const costsOn = hasKey === true && !isCustom
+  const imageCosts = useEstimates('image', IMAGE_IDS, project.aspectRatio, undefined, costsOn)
+  const videoCosts = useEstimates('video', VIDEO_IDS, project.aspectRatio, perClip, costsOn)
+  const imageModels = useMemo(
+    () => (isCustom ? customImages.models : withCosts(IMAGE_OPTIONS, imageCosts, () => '', costsOn)),
+    [isCustom, customImages.models, imageCosts, costsOn]
+  )
   const videoModels = useMemo(
-    () => withCosts(VIDEO_OPTIONS, videoCosts, (id) => `${fitDuration(getVideoModel(id), perClip)} dtk`, hasKey === true),
-    [videoCosts, perClip, hasKey]
+    () => (isCustom ? customVideos.models : withCosts(VIDEO_OPTIONS, videoCosts, (id) => `${fitDuration(getVideoModel(id), perClip)} dtk`, costsOn)),
+    [isCustom, customVideos.models, videoCosts, perClip, costsOn]
   )
 
   return (
@@ -95,7 +106,9 @@ export function ModelSection({
       <div className="flex items-baseline gap-2">
         <span className="text-sm font-semibold">Model AI</span>
         <span className="text-[13px] text-muted">
-          {IMAGE_OPTIONS.length} model gambar dan {VIDEO_OPTIONS.length} model video dari Higgsfield
+          {isCustom
+            ? `${imageModels.length} model gambar dan ${videoModels.length} model video dari endpoint custom`
+            : `${IMAGE_OPTIONS.length} model gambar dan ${VIDEO_OPTIONS.length} model video dari Higgsfield`}
         </span>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -103,22 +116,29 @@ export function ModelSection({
           <ModelPicker
             value={image.id}
             models={imageModels}
-            footerNote={hasKey ? 'kredit per gambar, perkiraan Higgsfield untuk akunmu' : undefined}
+            loading={isCustom && customImages.loading}
+            error={isCustom ? customImages.error : null}
+            fetchedAt={isCustom ? customImages.fetchedAt : null}
+            onRefresh={isCustom ? () => void customImages.refresh() : undefined}
+            allowCustom={isCustom}
+            footerNote={costsOn ? 'kredit per gambar, perkiraan Higgsfield untuk akunmu' : undefined}
             renderIcon={(m) => <ModelLogo family={m.family} />}
             detail="description"
             tagFilters={['Rekomendasi', 'Referensi', 'GPT Image', 'Soul', 'Recraft', '4K']}
             menuClassName="w-[430px]"
             onChange={(id) => onChange({ imageModel: id })}
           />
-          <p className="text-[12.5px] leading-snug text-ink-2">
-            <Cost value={imageCost} hasKey={hasKey}>
-              {(c) => (
-                <>
-                  ≈ {creditLabel(c)} kredit per gambar · {clipCount} gambar ≈ <b className="font-semibold text-ink">{creditLabel(c * clipCount)} kredit</b>
-                </>
-              )}
-            </Cost>
-          </p>
+          {!isCustom && (
+            <p className="text-[12.5px] leading-snug text-ink-2">
+              <Cost value={imageCost} hasKey={hasKey}>
+                {(c) => (
+                  <>
+                    ≈ {creditLabel(c)} kredit per gambar · {clipCount} gambar ≈ <b className="font-semibold text-ink">{creditLabel(c * clipCount)} kredit</b>
+                  </>
+                )}
+              </Cost>
+            </p>
+          )}
           <p className="flex items-start gap-1.5 text-[12.5px] leading-snug text-muted">
             <Users className="mt-px size-3.5 shrink-0" />
             {maxRefs(image)
@@ -130,7 +150,12 @@ export function ModelSection({
           <ModelPicker
             value={video.id}
             models={videoModels}
-            footerNote={hasKey ? `kredit per video untuk klip ±${perClip} detik` : undefined}
+            loading={isCustom && customVideos.loading}
+            error={isCustom ? customVideos.error : null}
+            fetchedAt={isCustom ? customVideos.fetchedAt : null}
+            onRefresh={isCustom ? () => void customVideos.refresh() : undefined}
+            allowCustom={isCustom}
+            footerNote={costsOn ? `kredit per video untuk klip ±${perClip} detik` : undefined}
             renderIcon={(m) => <ModelLogo family={m.family} />}
             detail="description"
             tagFilters={['Rekomendasi', 'Kling', 'Seedance', 'Wan', 'Referensi', '4K']}
@@ -152,15 +177,17 @@ export function ModelSection({
           ) : (
             resolution && <p className="text-[12.5px] text-ink-2">Resolusi {resolution} (satu-satunya pilihan model ini)</p>
           )}
-          <p className="text-[12.5px] leading-snug text-ink-2">
-            <Cost value={videoCost} hasKey={hasKey}>
-              {(c) => (
-                <>
-                  ≈ {creditLabel(c)} kredit per video {seconds} detik{resolution ? `, ${resolution}` : ''}
-                </>
-              )}
-            </Cost>
-          </p>
+          {!isCustom && (
+            <p className="text-[12.5px] leading-snug text-ink-2">
+              <Cost value={videoCost} hasKey={hasKey}>
+                {(c) => (
+                  <>
+                    ≈ {creditLabel(c)} kredit per video {seconds} detik{resolution ? `, ${resolution}` : ''}
+                  </>
+                )}
+              </Cost>
+            </p>
+          )}
           <p className="flex items-start gap-1.5 text-[12.5px] leading-snug text-muted">
             <Move className="mt-px size-3.5 shrink-0" />
             Hanya untuk klip yang kamu jadikan Video AI. Gerak kamera tetap gratis.

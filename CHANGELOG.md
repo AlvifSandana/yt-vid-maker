@@ -8,6 +8,16 @@ Cara menaikkan versi ada di [docs/pengembangan.md](docs/pengembangan.md#versi-da
 
 ## [Belum dirilis]
 
+### Ditambah
+- Gambar dan video lewat endpoint custom: daftar model diambil dari `GET /models` di server kamu, di Pengaturan
+  maupun di langkah Ide cerita. Nama model tetap bisa diketik manual.
+- Endpoint custom yang kompatibel OpenAI (9router, LiteLLM, dan sejenisnya) bisa membuat gambar lewat
+  `/images/generations`. Model chat tidak lagi muncul di daftar model gambar/video.
+
+### Diperbaiki
+- Membuat gambar lewat endpoint custom tidak lagi gagal dengan "Model ini belum bisa dipakai akun Higgsfield kamu"
+  berisi halaman HTML. Pesan error endpoint custom kini menyebut alamat yang salah dengan jelas.
+
 ### Diubah
 - Aplikasi berganti nama menjadi **Story Maker** (by Kucing Sakti). Folder data `Bang Story` atau `Studio Cerita`
   dipindahkan otomatis ke `%APPDATA%\Story Maker`. Installer kini bernama `StoryMaker-Setup-<versi>.exe`.

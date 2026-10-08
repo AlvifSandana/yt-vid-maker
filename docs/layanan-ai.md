@@ -63,6 +63,21 @@ Narasi selalu dibuat satu rekaman utuh lalu dipotong. Lihat [alur-produksi.md](a
   biaya per model selalu diambil dari sini.
 - Pesan error dibuat ramah (`friendly`): kunci salah, kredit habis, terlalu banyak proses, model tidak tersedia.
 - Untuk pengembangan, `STUDIO_HF_BASE` bisa diarahkan ke server tiruan (mock) supaya UI bisa diuji tanpa kredit.
+- **Endpoint custom** (`mediaProvider: 'custom'`): daftar model gambar/video diambil dari `GET {base}/models`
+  (`customMediaModels`, sumber `media-image`/`media-video`, cache 24 jam per base URL). Bentuk jawaban yang diterima:
+  `{ data: [...] }`, `{ models: [...] }`, atau array; tiap item berupa id atau objek `{ id|model|name, name?,
+  description?, family?, type|kind|modality|category|task|output_modalities? }`. Jenis gambar/video diambil dari field
+  itu, lalu dari id (`video`, `i2v` → video; `image`, `t2i` → gambar); model tanpa jenis muncul di kedua daftar. Id
+  yang ada di katalog Higgsfield ditampilkan dengan nama dan aturan katalog. Kalau server tidak punya `/models`, nama
+  model tetap bisa diketik manual. Model yang punya `capabilities` (gaya 9router) hanya masuk daftar kalau
+  `imageOutput`/`videoOutput` bernilai `true`, jadi model chat tidak ikut. `GET {base}/models/image` juga dicoba
+  (9router menaruh model gambar di sana). Daftar model memakai `Authorization: Bearer`, lalu `Key` kalau ditolak.
+- **Protokol endpoint custom** (`usesOpenAiImages`): gambar dengan model di luar katalog Higgsfield dikirim gaya OpenAI,
+  `POST {base}/images/generations` dengan `Bearer`, body `{ model, prompt, n: 1, size }` (`1792x1024` atau
+  `1024x1792`) plus `images` (data URL lembar karakter). Jawaban `data[0].b64_json` atau `data[0].url` langsung
+  disimpan; tidak ada polling, jadi job ini tidak dilanjutkan setelah aplikasi ditutup. Model katalog Higgsfield dan
+  semua video tetap memakai protokol Higgsfield (`POST {base}/{model}`, `Key`), untuk server proxy Higgsfield.
+  Error endpoint custom memakai `customFriendly` (tidak menyebut Higgsfield, tidak menempelkan halaman HTML).
 
 ### Katalog model (`src/shared/higgsfield-catalog.json`)
 
